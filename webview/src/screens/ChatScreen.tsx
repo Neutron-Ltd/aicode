@@ -1,11 +1,15 @@
-import React from "react";
+import React, { useState } from "react";
+import { ChatErrorBanner } from "../components/chat/ChatErrorBanner";
 import { Header } from "../components/chat/Header";
 import { InputArea } from "../components/chat/InputArea";
 import { MessageList } from "../components/chat/MessageList";
+import { SettingsPanel } from "../components/chat/SettingsPanel";
 import { MODEL_OPTIONS } from "../types/chat";
 import { useMirrorStore } from "../store/mirrorStore";
 
 export function ChatScreen(): React.ReactElement {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const selectedModelId = useMirrorStore((s) => s.selectedModelId);
   const setSelectedModelId = useMirrorStore((s) => s.setSelectedModelId);
   const tokenQuota = useMirrorStore((s) => s.tokenQuota);
@@ -21,36 +25,40 @@ export function ChatScreen(): React.ReactElement {
   const userEmail = useMirrorStore((s) => s.userEmail);
   const chatError = useMirrorStore((s) => s.chatError);
   const clearChat = useMirrorStore((s) => s.clearChat);
+  const requestLogout = useMirrorStore((s) => s.requestLogout);
+  const dismissChatError = useMirrorStore((s) => s.dismissChatError);
 
   const clearChatDisabled =
     messages.length === 0 || isSending;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-mirror-surface">
-      <Header
-        models={MODEL_OPTIONS}
-        selectedModelId={selectedModelId}
-        onModelChange={setSelectedModelId}
-        tokenQuota={tokenQuota}
-        onIndexWorkspace={indexWorkspace}
-        isIndexing={isIndexing}
-        onClearChat={clearChat}
-        clearChatDisabled={clearChatDisabled}
-        userLabel={userLabel}
-        userEmail={userEmail}
-      />
+    <div
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+      style={{ backgroundColor: "var(--vscode-sideBar-background)" }}
+    >
+      <div className="relative z-20 shrink-0">
+        <Header
+          models={MODEL_OPTIONS}
+          selectedModelId={selectedModelId}
+          onModelChange={setSelectedModelId}
+          onIndexWorkspace={indexWorkspace}
+          isIndexing={isIndexing}
+          onClearChat={clearChat}
+          clearChatDisabled={clearChatDisabled}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        {settingsOpen ? (
+          <SettingsPanel
+            userLabel={userLabel}
+            userEmail={userEmail}
+            tokenQuota={tokenQuota}
+            onLogout={requestLogout}
+            onClose={() => setSettingsOpen(false)}
+          />
+        ) : null}
+      </div>
       {chatError ? (
-        <div
-          className="shrink-0 border-b px-3 py-2 text-xs"
-          style={{
-            color: "var(--vscode-errorForeground)",
-            backgroundColor: "var(--vscode-inputValidation-errorBackground)",
-            borderColor: "var(--vscode-inputValidation-errorBorder)",
-          }}
-          role="alert"
-        >
-          {chatError}
-        </div>
+        <ChatErrorBanner message={chatError} onDismiss={dismissChatError} />
       ) : null}
       <MessageList
         messages={messages}

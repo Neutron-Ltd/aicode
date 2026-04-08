@@ -1,40 +1,48 @@
 import React from "react";
 import type { ModelOption } from "../../types/chat";
 
+const iconBtn =
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-200 hover:bg-[color-mix(in_srgb,var(--vscode-toolbar-hoverBackground)_85%,transparent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vscode-focusBorder)] disabled:cursor-not-allowed disabled:opacity-35";
+
 export function Header({
   models,
   selectedModelId,
   onModelChange,
-  tokenQuota,
   onIndexWorkspace,
   isIndexing,
   onClearChat,
   clearChatDisabled,
-  userLabel,
-  userEmail,
+  onOpenSettings,
 }: {
   models: ModelOption[];
   selectedModelId: string;
   onModelChange: (id: string) => void;
-  tokenQuota: number;
   onIndexWorkspace: () => void;
   isIndexing: boolean;
   onClearChat: () => void;
   clearChatDisabled: boolean;
-  userLabel: string | null;
-  userEmail: string | null;
+  onOpenSettings: () => void;
 }): React.ReactElement {
-  const formatted = new Intl.NumberFormat(undefined).format(tokenQuota);
-
   return (
-    <header className="sticky top-0 z-20 shrink-0 border-b border-mirror-border bg-mirror-surface/95 backdrop-blur-sm transition-colors duration-200">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1 py-2">
-        <label className="flex min-w-0 flex-1 items-center gap-2">
+    <header
+      className="shrink-0 border-b backdrop-blur-sm transition-colors duration-200"
+      style={{
+        borderColor: "color-mix(in srgb, var(--vscode-sideBar-border, #555) 55%, transparent)",
+        backgroundColor: "color-mix(in srgb, var(--vscode-sideBar-background) 88%, transparent)",
+      }}
+    >
+      <div className="flex items-center justify-between gap-2 px-2 py-2">
+        <label className="flex min-w-0 flex-1 items-center">
           <span className="sr-only">Model</span>
           <select
             value={selectedModelId}
             onChange={(e) => onModelChange(e.target.value)}
-            className="max-w-full cursor-pointer rounded-lg border border-mirror-border bg-mirror-input py-1.5 pl-2 pr-8 text-xs font-medium text-mirror-input-fg shadow-sm transition-all duration-200 ease-out hover:border-mirror-focus focus:outline-none focus:ring-2 focus:ring-mirror-focus"
+            className="max-w-full min-w-0 cursor-pointer rounded-lg border py-1.5 pl-2.5 pr-8 text-[11px] font-medium transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vscode-focusBorder)]"
+            style={{
+              borderColor: "var(--vscode-sideBar-border, rgba(128,128,128,0.35))",
+              backgroundColor: "var(--vscode-input-background)",
+              color: "var(--vscode-input-foreground)",
+            }}
           >
             {models.map((m) => (
               <option key={m.id} value={m.id}>
@@ -43,59 +51,52 @@ export function Header({
             ))}
           </select>
         </label>
-        <div
-          className="shrink-0 text-right text-[11px] leading-tight text-mirror-muted transition-colors duration-200"
-          title="Remaining quota"
-        >
-          <span className="font-mono text-[12px] font-semibold tabular-nums text-mirror-fg">
-            {formatted}
-          </span>
-          <span className="ml-1">tokens left</span>
-        </div>
-      </div>
-      {(userLabel || userEmail) && (
-        <div className="truncate border-t border-mirror-border/60 px-1 py-1 text-[10px] text-mirror-muted">
-          <span className="font-medium text-mirror-fg">{userLabel}</span>
-          {userEmail ? (
-            <span className="ml-2 opacity-80">{userEmail}</span>
-          ) : null}
-        </div>
-      )}
-      <div className="flex items-center justify-end gap-1.5 border-t border-mirror-border/60 px-1 py-1.5">
-        <button
-          type="button"
-          onClick={onClearChat}
-          disabled={clearChatDisabled}
-          aria-label="Clear chat"
-          className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
-          title={clearChatDisabled ? "Cannot clear while sending" : "Clear chat"}
-        >
-          <svg
-            aria-hidden
-            className="h-3 w-3 shrink-0 opacity-80"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={onClearChat}
+            disabled={clearChatDisabled}
+            className={iconBtn}
+            style={{ color: "var(--vscode-icon-foreground, var(--vscode-foreground))" }}
+            title={clearChatDisabled ? "Cannot clear while sending" : "Clear chat"}
+            aria-label="Clear chat"
           >
-            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-            <path d="M10 11v6M14 11v6" />
-          </svg>
-          <span>Clear</span>
-        </button>
-        <button
-          type="button"
-          onClick={onIndexWorkspace}
-          disabled={isIndexing}
-          aria-busy={isIndexing}
-          aria-label="Index workspace"
-          className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
-          title={isIndexing ? "Indexing workspace..." : "Index Workspace"}
-        >
-          {isIndexing ? "Indexing..." : "Index Workspace"}
-        </button>
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+              <path d="M10 11v6M14 11v6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={onIndexWorkspace}
+            disabled={isIndexing}
+            aria-busy={isIndexing}
+            className={iconBtn}
+            style={{ color: "var(--vscode-icon-foreground, var(--vscode-foreground))" }}
+            title={isIndexing ? "Indexing workspace…" : "Index workspace for AI context (embeddings)"}
+            aria-label="Index workspace"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <ellipse cx="12" cy="5" rx="9" ry="3" />
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className={iconBtn}
+            style={{ color: "var(--vscode-icon-foreground, var(--vscode-foreground))" }}
+            title="Settings"
+            aria-label="Settings"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
   );

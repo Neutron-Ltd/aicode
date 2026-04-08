@@ -37,6 +37,8 @@ export interface MirrorState {
   sendUserMessage: () => void;
   requestInsertCode: (code: string) => void;
   clearChat: () => void;
+  requestLogout: () => void;
+  dismissChatError: () => void;
 }
 
 export const useMirrorStore = create<MirrorState>((set, get) => ({
@@ -133,6 +135,20 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
           chatError: msg.payload.message,
         });
         break;
+      case "LOGGED_OUT":
+        set({
+          isLoggedIn: false,
+          userLabel: null,
+          userEmail: null,
+          signingIn: false,
+          authError: null,
+          chatError: null,
+          isSending: false,
+          isIndexing: false,
+          messages: [SEED_MESSAGE],
+          inputDraft: "",
+        });
+        break;
     }
   },
 
@@ -196,4 +212,10 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
   clearChat: () => {
     set({ messages: [], chatError: null });
   },
+
+  requestLogout: () => {
+    postToHost({ type: "LOGOUT_REQUEST" });
+  },
+
+  dismissChatError: () => set({ chatError: null }),
 }));

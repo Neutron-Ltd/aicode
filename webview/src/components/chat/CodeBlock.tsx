@@ -82,7 +82,7 @@ export function CodeBlock({
   };
 
   return (
-    <div className="group relative my-2 overflow-hidden rounded-lg border border-mirror-border shadow-mirror transition-shadow duration-200 ease-out hover:shadow-md">
+    <div className="group relative my-3 overflow-hidden rounded-lg border transition-colors duration-200" style={{ borderColor: "color-mix(in srgb, var(--vscode-widget-border, #444) 45%, transparent)" }}>
       <div className="absolute right-1 top-1 z-10 opacity-0 transition-opacity duration-200 ease-out group-hover:opacity-100 group-focus-within:opacity-100">
         <button
           type="button"

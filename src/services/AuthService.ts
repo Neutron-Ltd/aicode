@@ -327,6 +327,27 @@ export class AuthService {
     this.postLoginSuccess(session.user);
   }
 
+
+  /** End session and notify the webview. */
+  async logout(): Promise<void> {
+    const client = this.getOrCreateClient();
+    if (client) {
+      const { error } = await client.auth.signOut();
+      if (error) {
+        void vscode.window.showErrorMessage(`Mirror: ${error.message}`);
+        this.postToWebview({
+          type: "AUTH_ERROR",
+          payload: { message: error.message },
+        });
+        return;
+      }
+    }
+    this.client = null;
+    this.lastUrl = "";
+    this.lastKey = "";
+    this.postToWebview({ type: "LOGGED_OUT" });
+  }
+
   private postLoginSuccess(user: {
     email?: string | null;
     user_metadata?: Record<string, unknown>;

@@ -11,7 +11,8 @@ export type WebviewToHostMessage =
   | { type: "REGISTER_REQUEST"; payload: { email: string; password: string } }
   | { type: "SEND_MESSAGE"; payload: { text: string; modelId: string } }
   | { type: "INDEX_WORKSPACE" }
-  | { type: "INSERT_CODE"; payload: { code: string } };
+  | { type: "INSERT_CODE"; payload: { code: string } }
+  | { type: "LOGOUT_REQUEST" };
 
 export type HostToWebviewMessage =
   | { type: "PONG"; payload: { ts: number; clientTs?: number } }
@@ -35,7 +36,9 @@ export type HostToWebviewMessage =
   | { type: "CHAT_ERROR"; payload: { message: string } }
   | { type: "INDEX_STARTED" }
   | { type: "INDEX_COMPLETE"; payload: { files: number; chunks: number } }
-  | { type: "INDEX_ERROR"; payload: { message: string } };
+  | { type: "INDEX_ERROR"; payload: { message: string } }
+  /** Session cleared after sign-out. */
+  | { type: "LOGGED_OUT" };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -90,6 +93,8 @@ export function parseWebviewMessage(raw: unknown): WebviewToHostMessage | null {
       if (typeof code !== "string") return null;
       return { type: "INSERT_CODE", payload: { code } };
     }
+    case "LOGOUT_REQUEST":
+      return { type: "LOGOUT_REQUEST" };
     default:
       return null;
   }
@@ -187,6 +192,8 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       if (typeof message !== "string") return null;
       return { type: "INDEX_ERROR", payload: { message } };
     }
+    case "LOGGED_OUT":
+      return { type: "LOGGED_OUT" };
     default:
       return null;
   }

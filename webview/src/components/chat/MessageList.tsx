@@ -29,57 +29,49 @@ export function MessageList({
 
   if (messages.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center px-4 py-8 text-center">
-        <p className="text-sm text-mirror-muted transition-colors duration-200">
-          No messages yet. Ask Mirror anything about your code.
+      <div className="flex flex-1 flex-col items-center justify-center px-4 py-12 text-center">
+        <p className="max-w-[18rem] text-[13px] leading-relaxed" style={{ color: "var(--vscode-descriptionForeground)" }}>
+          Ask Mirror anything about your code.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 py-2">
+    <div
+      className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-3 py-4"
+      style={{ backgroundColor: "var(--vscode-sideBar-background)" }}
+    >
       {messages.map((m) => {
         if (m.role === "assistant" && m.content === "" && isSending) {
           return null;
         }
-        return (
-          <div
-            key={m.id}
-            className={
-              m.role === "user"
-                ? "ml-4 flex justify-end"
-                : "mr-4 flex justify-start"
-            }
-          >
-            <div
-              className={
-                m.role === "user"
-                  ? "max-w-[min(100%,28rem)] rounded-2xl border border-mirror-border bg-mirror-bubble-user px-3 py-2 text-mirror-bubble-user-fg shadow-mirror transition-all duration-200 ease-out"
-                  : "max-w-[min(100%,28rem)] rounded-2xl border border-mirror-border bg-mirror-bubble-ai px-3 py-2 text-mirror-bubble-ai-fg shadow-mirror transition-all duration-200 ease-out"
-              }
-            >
-              <MarkdownMessage
-                content={m.content}
-                onApplyCode={onApplyCode}
-              />
+        if (m.role === "user") {
+          return (
+            <div key={m.id} className="flex justify-end pl-8">
+              <div
+                className="max-w-[min(100%,26rem)] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed"
+                style={{
+                  backgroundColor: "color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent)",
+                  color: "var(--vscode-sideBar-foreground)",
+                }}
+              >
+                <MarkdownMessage content={m.content} onApplyCode={onApplyCode} variant="inline" />
+              </div>
             </div>
+          );
+        }
+        return (
+          <div key={m.id} className="min-w-0 pr-2">
+            <MarkdownMessage content={m.content} onApplyCode={onApplyCode} variant="flush" />
           </div>
         );
       })}
       {showTypingIndicator ? (
-        <div
-          className="mr-4 flex justify-start"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex items-center gap-2 rounded-2xl border border-mirror-border border-dashed bg-mirror-bubble-ai/50 px-3 py-2 text-xs text-mirror-muted">
-            <span
-              className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-mirror-muted"
-              aria-hidden
-            />
-            <span>AI is typing…</span>
-          </div>
+        <div className="flex justify-start pr-8" role="status" aria-live="polite">
+          <span className="text-[12px] italic" style={{ color: "var(--vscode-descriptionForeground)" }}>
+            …
+          </span>
         </div>
       ) : null}
       <div ref={bottomRef} className="h-px shrink-0" aria-hidden />

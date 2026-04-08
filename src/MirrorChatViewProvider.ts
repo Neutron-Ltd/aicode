@@ -167,6 +167,22 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
       case "INSERT_CODE":
         void this._insertCodeAtCursor(msg.payload.code);
         break;
+      case "LOGOUT_REQUEST": {
+        const auth = this._auth;
+        if (!auth) {
+          void w.postMessage({
+            type: "AUTH_ERROR",
+            payload: { message: "Auth service not ready." },
+          });
+          break;
+        }
+        void auth.logout().catch((err: unknown) => {
+          const message =
+            err instanceof Error ? err.message : "Sign out failed.";
+          void w.postMessage({ type: "AUTH_ERROR", payload: { message } });
+        });
+        break;
+      }
       case "INDEX_WORKSPACE": {
         const scanner = this._workspaceScanner;
         if (!scanner) {

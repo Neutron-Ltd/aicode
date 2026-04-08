@@ -19,12 +19,22 @@ function isInlineCode(
 export function MarkdownMessage({
   content,
   onApplyCode,
+  variant = "default",
 }: {
   content: string;
   onApplyCode: (code: string) => void;
+  /** `flush`: assistant turn — no card. `inline`: compact user bubble. */
+  variant?: "default" | "flush" | "inline";
 }): React.ReactElement {
+  const rootClass =
+    variant === "flush"
+      ? "prose prose-mirror prose-sm max-w-none [&_p]:my-2.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:my-0.5"
+      : variant === "inline"
+        ? "prose prose-mirror prose-sm max-w-none [&_p]:my-0 [&_p+_p]:mt-2"
+        : "prose prose-mirror prose-sm max-w-none";
+
   return (
-    <div className="prose prose-mirror prose-sm max-w-none">
+    <div className={rootClass}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -44,7 +54,11 @@ export function MarkdownMessage({
             }
             return (
               <code
-                className="rounded bg-mirror-code-bg px-1 py-0.5 font-mono text-[0.9em] text-mirror-code-fg"
+                className="rounded px-1 py-0.5 font-mono text-[0.9em]"
+                style={{
+                  backgroundColor: "var(--vscode-textCodeBlock-background, var(--vscode-editor-background))",
+                  color: "var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground))",
+                }}
                 {...props}
               >
                 {children}
