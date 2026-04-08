@@ -1,7 +1,7 @@
 {
   "name": "mirror",
   "displayName": "Mirror",
-  "description": "AI coding assistant — Mirror (Phase 1 foundation)",
+  "description": "AI coding assistant \u2014 Mirror (Phase 1 foundation)",
   "version": "0.0.1",
   "publisher": "mirror",
   "engines": {
@@ -33,26 +33,6 @@
           "type": "webview"
         }
       ]
-    },
-    "configuration": {
-      "title": "Mirror",
-      "properties": {
-        "mirror.supabaseUrl": {
-          "type": "string",
-          "default": "",
-          "description": "Supabase project URL (Settings → API → Project URL)."
-        },
-        "mirror.supabaseAnonKey": {
-          "type": "string",
-          "default": "",
-          "description": "Supabase anon (public) key — never use the service_role key."
-        },
-        "mirror.authProvider": {
-          "type": "string",
-          "default": "github",
-          "description": "OAuth provider id for signInWithOAuth (e.g. github, google)."
-        }
-      }
     }
   },
   "scripts": {

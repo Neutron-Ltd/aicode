@@ -4,8 +4,6 @@ import { useMirrorStore } from "../store/mirrorStore";
 export function LoginScreen(): React.ReactElement {
   const submitLogin = useMirrorStore((s) => s.submitLogin);
   const submitRegister = useMirrorStore((s) => s.submitRegister);
-  const sendPing = useMirrorStore((s) => s.sendPing);
-  const lastPongAt = useMirrorStore((s) => s.lastPongAt);
   const signingIn = useMirrorStore((s) => s.signingIn);
   const authError = useMirrorStore((s) => s.authError);
 
@@ -14,15 +12,6 @@ export function LoginScreen(): React.ReactElement {
 
   const emailId = useId();
   const passwordId = useId();
-
-  const pongLabel =
-    lastPongAt !== null
-      ? new Date(lastPongAt).toLocaleTimeString(undefined, {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      : "—";
 
   const handleLogin = useCallback(
     (e: React.FormEvent) => {
@@ -47,122 +36,119 @@ export function LoginScreen(): React.ReactElement {
   const canSubmit = Boolean(email.trim() && password) && !signingIn;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center bg-mirror-surface px-4 py-8">
-      <div className="w-full max-w-sm rounded-2xl border border-mirror-border bg-mirror-input p-6 shadow-mirror transition-all duration-200 ease-out">
-        <div className="mb-6 text-center">
-          <h1 className="mb-1 text-xl font-semibold tracking-tight text-mirror-fg">
-            Mirror
-          </h1>
-          <p className="text-sm leading-relaxed text-mirror-muted">
-            Sign in with your Supabase account. Enable Email auth in your Supabase
-            project (Authentication → Providers).
-          </p>
-        </div>
-
-        <form
-          onSubmit={handleLogin}
-          className="space-y-4"
-          noValidate
-          aria-busy={signingIn}
-        >
-          {authError ? (
-            <p
-              className="rounded-lg border border-mirror-border bg-mirror-surface px-3 py-2 text-xs text-mirror-muted"
-              role="alert"
-              aria-live="polite"
-            >
-              {authError}
-            </p>
-          ) : null}
-
-          <div className="space-y-1.5">
-            <label
-              htmlFor={emailId}
-              className="block text-xs font-medium text-mirror-fg"
-            >
-              Email
-            </label>
-            <input
-              id={emailId}
-              type="email"
-              name="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={signingIn}
-              className="w-full rounded-xl border border-mirror-border bg-mirror-surface px-3 py-2.5 text-sm text-mirror-input-fg shadow-sm transition-colors duration-200 ease-out placeholder:text-mirror-muted focus:border-mirror-focus focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:opacity-60"
-              placeholder="you@example.com"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label
-              htmlFor={passwordId}
-              className="block text-xs font-medium text-mirror-fg"
-            >
-              Password
-            </label>
-            <input
-              id={passwordId}
-              type="password"
-              name="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={signingIn}
-              className="w-full rounded-xl border border-mirror-border bg-mirror-surface px-3 py-2.5 text-sm text-mirror-input-fg shadow-sm transition-colors duration-200 ease-out placeholder:text-mirror-muted focus:border-mirror-focus focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:opacity-60"
-              placeholder="••••••••"
-            />
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:gap-2">
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="flex-1 rounded-xl border border-transparent bg-[var(--vscode-button-background)] px-4 py-3 text-sm font-semibold text-[var(--vscode-button-foreground)] shadow-sm transition-all duration-200 ease-out hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-mirror-focus focus:ring-offset-2 focus:ring-offset-mirror-surface disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {signingIn ? "Please wait…" : "Log In"}
-            </button>
-            <button
-              type="button"
-              disabled={!canSubmit}
-              onClick={handleRegister}
-              className="flex-1 rounded-xl border border-mirror-border bg-mirror-surface px-4 py-3 text-sm font-semibold text-mirror-fg shadow-sm transition-all duration-200 ease-out hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Create Account
-            </button>
-          </div>
-        </form>
-
-        <div className="mt-4 rounded-xl border border-mirror-border/80 bg-mirror-surface/40 p-3 text-[11px] leading-snug text-mirror-muted transition-colors duration-200">
-          Configure{" "}
-          <code className="rounded bg-mirror-code-bg px-1 py-0.5 font-mono text-[10px] text-mirror-code-fg">
-            mirror.supabaseUrl
-          </code>{" "}
-          and{" "}
-          <code className="rounded bg-mirror-code-bg px-1 py-0.5 font-mono text-[10px] text-mirror-code-fg">
-            mirror.supabaseAnonKey
-          </code>{" "}
-          in Settings.
-        </div>
-
-        <details className="mt-4 rounded-xl border border-mirror-border/60 bg-mirror-surface/30 transition-colors duration-200">
-          <summary className="cursor-pointer select-none px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-mirror-muted">
-            Bridge test
-          </summary>
-          <div className="border-t border-mirror-border/60 px-3 pb-3 pt-2">
-            <button
-              type="button"
-              onClick={() => sendPing()}
-              className="w-full rounded-lg border border-mirror-border bg-mirror-surface px-3 py-2 text-xs font-medium text-mirror-fg transition-colors duration-200 ease-out hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus"
-            >
-              Ping extension host
-            </button>
-            <p className="mt-2 text-center font-mono text-[11px] text-mirror-muted">
-              Last PONG: <span className="text-mirror-fg">{pongLabel}</span>
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-mirror-surface">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.45]"
+        style={{
+          background:
+            "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.22), transparent), radial-gradient(ellipse 60% 40% at 100% 0%, rgba(139, 92, 246, 0.12), transparent)",
+        }}
+        aria-hidden
+      />
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-5 py-10 sm:px-8">
+        <div className="w-full max-w-[22rem]">
+          <div className="mb-8 text-center">
+            <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25 ring-1 ring-white/10">
+              <svg
+                className="h-5 w-5 text-white"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+                <path d="M19 3v4M21 5h-4" />
+              </svg>
+            </div>
+            <h1 className="text-xl font-semibold tracking-tight text-mirror-fg sm:text-2xl">
+              Welcome to Mirror
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-mirror-muted">
+              Sign in to your account to continue. New here? Create an account
+              in one step.
             </p>
           </div>
-        </details>
+
+          <div className="rounded-2xl border border-mirror-border bg-mirror-input/80 p-6 shadow-[0_8px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm transition-colors duration-200">
+            <form
+              onSubmit={handleLogin}
+              className="space-y-5"
+              noValidate
+              aria-busy={signingIn}
+            >
+              {authError ? (
+                <p
+                  className="rounded-xl border border-red-500/35 bg-red-500/[0.08] px-3.5 py-2.5 text-xs leading-relaxed text-mirror-fg"
+                  role="alert"
+                  aria-live="polite"
+                >
+                  {authError}
+                </p>
+              ) : null}
+
+              <div className="space-y-2">
+                <label
+                  htmlFor={emailId}
+                  className="block text-xs font-semibold uppercase tracking-wide text-mirror-muted"
+                >
+                  Email
+                </label>
+                <input
+                  id={emailId}
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={signingIn}
+                  className="w-full rounded-xl border-2 border-mirror-border bg-mirror-surface px-3.5 py-3 text-sm text-mirror-input-fg shadow-sm transition-all duration-200 placeholder:text-mirror-muted/80 hover:border-mirror-muted/50 focus:border-indigo-500/70 focus:outline-none focus:ring-2 focus:ring-indigo-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  placeholder="name@company.com"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label
+                  htmlFor={passwordId}
+                  className="block text-xs font-semibold uppercase tracking-wide text-mirror-muted"
+                >
+                  Password
+                </label>
+                <input
+                  id={passwordId}
+                  type="password"
+                  name="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={signingIn}
+                  className="w-full rounded-xl border-2 border-mirror-border bg-mirror-surface px-3.5 py-3 text-sm text-mirror-input-fg shadow-sm transition-all duration-200 placeholder:text-mirror-muted/80 hover:border-mirror-muted/50 focus:border-indigo-500/70 focus:outline-none focus:ring-2 focus:ring-indigo-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  placeholder="Enter your password"
+                />
+              </div>
+
+              <div className="flex flex-col gap-3 pt-1">
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/25 transition-all duration-200 hover:from-indigo-500 hover:to-violet-500 hover:shadow-lg hover:shadow-indigo-600/30 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-mirror-surface disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none disabled:hover:from-indigo-600 disabled:hover:to-violet-600"
+                >
+                  {signingIn ? "Please wait…" : "Log in"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canSubmit}
+                  onClick={handleRegister}
+                  className="w-full rounded-xl border-2 border-mirror-border bg-transparent px-4 py-3 text-sm font-semibold text-mirror-fg transition-all duration-200 hover:border-mirror-muted hover:bg-mirror-surface/80 focus:outline-none focus:ring-2 focus:ring-mirror-focus focus:ring-offset-2 focus:ring-offset-mirror-input disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-mirror-border disabled:hover:bg-transparent"
+                >
+                  Create account
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   );

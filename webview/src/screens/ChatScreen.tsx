@@ -15,10 +15,8 @@ export function ChatScreen(): React.ReactElement {
   const sendUserMessage = useMirrorStore((s) => s.sendUserMessage);
   const isSending = useMirrorStore((s) => s.isSending);
   const requestInsertCode = useMirrorStore((s) => s.requestInsertCode);
-  const sendPing = useMirrorStore((s) => s.sendPing);
   const indexWorkspace = useMirrorStore((s) => s.indexWorkspace);
   const isIndexing = useMirrorStore((s) => s.isIndexing);
-  const lastPongAt = useMirrorStore((s) => s.lastPongAt);
   const userLabel = useMirrorStore((s) => s.userLabel);
   const userEmail = useMirrorStore((s) => s.userEmail);
   const chatError = useMirrorStore((s) => s.chatError);
@@ -34,8 +32,6 @@ export function ChatScreen(): React.ReactElement {
         selectedModelId={selectedModelId}
         onModelChange={setSelectedModelId}
         tokenQuota={tokenQuota}
-        lastPongAt={lastPongAt}
-        onPing={sendPing}
         onIndexWorkspace={indexWorkspace}
         isIndexing={isIndexing}
         onClearChat={clearChat}

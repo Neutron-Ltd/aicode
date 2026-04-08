@@ -28,14 +28,14 @@ export class ApiService {
     const { url, key } = getMirrorSupabaseConfig();
     if (!url || !key) {
       const message =
-        "Set mirror.supabaseUrl and mirror.supabaseAnonKey in Settings.";
+        "Mirror is not configured. Backend URL and key are missing in the extension build.";
       this.postChatError(message);
       void vscode.window.showErrorMessage(`Mirror: ${message}`);
       return;
     }
 
     if (!this.auth.getSupabaseClient()) {
-      const message = "Supabase client not configured.";
+      const message = "Mirror client not configured.";
       this.postChatError(message);
       void vscode.window.showErrorMessage(`Mirror: ${message}`);
       return;

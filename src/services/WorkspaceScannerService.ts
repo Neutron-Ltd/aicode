@@ -104,7 +104,7 @@ export class WorkspaceScannerService {
       const { url, key } = getMirrorSupabaseConfig();
       if (!url || !key) {
         throw new Error(
-          "Set mirror.supabaseUrl and mirror.supabaseAnonKey in Settings."
+          "Mirror is not configured. Backend URL and key are missing in the extension build."
         );
       }
       const token = await this.auth.getSessionAccessToken();

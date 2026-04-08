@@ -1,5 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import * as vscode from "vscode";
+import {
+  MIRROR_OAUTH_PROVIDER,
+  SUPABASE_ANON_KEY,
+  SUPABASE_URL,
+} from "../config";
 import type { HostToWebviewMessage } from "../shared/messages";
 
 /** Must match package.json publisher + name → vscode://mirror.mirror/... */
@@ -52,16 +57,15 @@ class BlobSecretStorage {
   }
 }
 
-/** Shared Supabase URL/key from Settings (also used by ApiService). */
+/** Shared Supabase URL/key from bundled config (also used by ApiService). */
 export function getMirrorSupabaseConfig(): {
   url: string;
   key: string;
   provider: string;
 } {
-  const cfg = vscode.workspace.getConfiguration("mirror");
-  const url = (cfg.get<string>("supabaseUrl") ?? "").trim();
-  const key = (cfg.get<string>("supabaseAnonKey") ?? "").trim();
-  const provider = (cfg.get<string>("authProvider") ?? "github").trim() || "github";
+  const url = SUPABASE_URL.trim();
+  const key = SUPABASE_ANON_KEY.trim();
+  const provider = MIRROR_OAUTH_PROVIDER.trim() || "github";
   return { url, key, provider };
 }
 
@@ -118,7 +122,7 @@ export class AuthService {
   async loginUser(email: string, password: string): Promise<void> {
     const client = this.getOrCreateClient();
     if (!client) {
-      const msg = "Set mirror.supabaseUrl and mirror.supabaseAnonKey in Settings.";
+      const msg = "Mirror is not configured. Backend URL and key are missing in the extension build.";
       void vscode.window.showErrorMessage(`Mirror: ${msg}`);
       this.postAuthError(msg);
       return;
@@ -154,7 +158,7 @@ export class AuthService {
   async registerUser(email: string, password: string): Promise<void> {
     const client = this.getOrCreateClient();
     if (!client) {
-      const msg = "Set mirror.supabaseUrl and mirror.supabaseAnonKey in Settings.";
+      const msg = "Mirror is not configured. Backend URL and key are missing in the extension build.";
       void vscode.window.showErrorMessage(`Mirror: ${msg}`);
       this.postAuthError(msg);
       return;
@@ -216,7 +220,7 @@ export class AuthService {
     const client = this.getOrCreateClient();
     const { provider } = getMirrorSupabaseConfig();
     if (!client) {
-      const msg = "Set mirror.supabaseUrl and mirror.supabaseAnonKey in Settings.";
+      const msg = "Mirror is not configured. Backend URL and key are missing in the extension build.";
       void vscode.window.showErrorMessage(`Mirror: ${msg}`);
       this.postToWebview({
         type: "AUTH_ERROR",
@@ -244,7 +248,7 @@ export class AuthService {
     }
 
     if (!data.url) {
-      const msg = "No OAuth URL returned from Supabase.";
+      const msg = "No OAuth URL returned.";
       void vscode.window.showErrorMessage(`Mirror: ${msg}`);
       this.postToWebview({ type: "AUTH_ERROR", payload: { message: msg } });
       return;
@@ -261,7 +265,7 @@ export class AuthService {
     const client = this.getOrCreateClient();
     if (!client) {
       void vscode.window.showErrorMessage(
-        "Mirror: Supabase not configured. Set mirror.supabaseUrl and mirror.supabaseAnonKey."
+        "Mirror: not configured. Backend URL and key are missing in the extension build."
       );
       return;
     }
@@ -280,7 +284,7 @@ export class AuthService {
     const code = params.get("code");
     if (!code) {
       void vscode.window.showErrorMessage(
-        "Mirror: OAuth callback missing code. Check Redirect URLs in Supabase."
+        "Mirror: OAuth callback missing code. Check redirect URLs for this app."
       );
       this.postToWebview({
         type: "AUTH_ERROR",

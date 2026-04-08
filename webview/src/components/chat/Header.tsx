@@ -6,8 +6,6 @@ export function Header({
   selectedModelId,
   onModelChange,
   tokenQuota,
-  lastPongAt,
-  onPing,
   onIndexWorkspace,
   isIndexing,
   onClearChat,
@@ -19,8 +17,6 @@ export function Header({
   selectedModelId: string;
   onModelChange: (id: string) => void;
   tokenQuota: number;
-  lastPongAt: number | null;
-  onPing: () => void;
   onIndexWorkspace: () => void;
   isIndexing: boolean;
   onClearChat: () => void;
@@ -29,14 +25,6 @@ export function Header({
   userEmail: string | null;
 }): React.ReactElement {
   const formatted = new Intl.NumberFormat(undefined).format(tokenQuota);
-  const pongLabel =
-    lastPongAt !== null
-      ? new Date(lastPongAt).toLocaleTimeString(undefined, {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      : "—";
 
   return (
     <header className="sticky top-0 z-20 shrink-0 border-b border-mirror-border bg-mirror-surface/95 backdrop-blur-sm transition-colors duration-200">
@@ -73,53 +61,41 @@ export function Header({
           ) : null}
         </div>
       )}
-      <div className="flex items-center justify-between gap-2 border-t border-mirror-border/60 px-1 py-1.5">
-        <span className="truncate font-mono text-[10px] text-mirror-muted">
-          PONG: <span className="text-mirror-fg">{pongLabel}</span>
-        </span>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onClearChat}
-            disabled={clearChatDisabled}
-            aria-label="Clear chat"
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
-            title={clearChatDisabled ? "Cannot clear while sending" : "Clear chat"}
+      <div className="flex items-center justify-end gap-1.5 border-t border-mirror-border/60 px-1 py-1.5">
+        <button
+          type="button"
+          onClick={onClearChat}
+          disabled={clearChatDisabled}
+          aria-label="Clear chat"
+          className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
+          title={clearChatDisabled ? "Cannot clear while sending" : "Clear chat"}
+        >
+          <svg
+            aria-hidden
+            className="h-3 w-3 shrink-0 opacity-80"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            <svg
-              aria-hidden
-              className="h-3 w-3 shrink-0 opacity-80"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-              <path d="M10 11v6M14 11v6" />
-            </svg>
-            <span>Clear</span>
-          </button>
-          <button
-            type="button"
-            onClick={onIndexWorkspace}
-            disabled={isIndexing}
-            aria-busy={isIndexing}
-            aria-label="Index workspace"
-            className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
-            title={isIndexing ? "Indexing workspace..." : "Index Workspace"}
-          >
-            {isIndexing ? "Indexing..." : "Index Workspace"}
-          </button>
-          <button
-            type="button"
-            onClick={onPing}
-            className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus"
-          >
-            Ping
-          </button>
-        </div>
+            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+            <path d="M10 11v6M14 11v6" />
+          </svg>
+          <span>Clear</span>
+        </button>
+        <button
+          type="button"
+          onClick={onIndexWorkspace}
+          disabled={isIndexing}
+          aria-busy={isIndexing}
+          aria-label="Index workspace"
+          className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
+          title={isIndexing ? "Indexing workspace..." : "Index Workspace"}
+        >
+          {isIndexing ? "Indexing..." : "Index Workspace"}
+        </button>
       </div>
     </header>
   );
