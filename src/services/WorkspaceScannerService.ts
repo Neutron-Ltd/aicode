@@ -10,30 +10,76 @@ type WorkspaceChunk = {
 };
 
 const HARD_IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build"]);
+
+/** Non-text assets and binaries — never embed. */
 const BINARY_EXTENSIONS = new Set([
   ".png",
   ".jpg",
   ".jpeg",
   ".gif",
   ".webp",
+  ".bmp",
   ".ico",
+  ".tif",
+  ".tiff",
+  ".heic",
+  ".avif",
   ".pdf",
   ".zip",
+  ".tar",
   ".gz",
+  ".tgz",
+  ".bz2",
+  ".xz",
   ".7z",
+  ".rar",
   ".mp4",
   ".mov",
+  ".webm",
+  ".mkv",
+  ".avi",
   ".mp3",
   ".wav",
+  ".flac",
+  ".aac",
+  ".m4a",
+  ".ogg",
   ".woff",
   ".woff2",
   ".ttf",
   ".otf",
+  ".eot",
   ".exe",
   ".dll",
+  ".bin",
   ".so",
   ".dylib",
+  ".app",
+  ".dmg",
+  ".iso",
+  ".deb",
+  ".rpm",
+  ".msi",
+  ".sqlite",
+  ".db",
+  ".mdb",
+  ".pak",
+  ".wasm",
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".o",
+  ".a",
+  ".lib",
+  ".obj",
+  ".psd",
+  ".ai",
+  ".sketch",
+  ".fig",
 ]);
+
+/** Exact filenames (lowercase) to skip — e.g. `.DS_Store` has no normal extension. */
+const BINARY_EXACT_NAMES = new Set([".ds_store", "thumbs.db"]);
 const MAX_FILE_BYTES = 512_000;
 const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_OVERLAP = 120;
@@ -146,6 +192,7 @@ export class WorkspaceScannerService {
       return true;
     }
     const lower = name.toLowerCase();
+    if (BINARY_EXACT_NAMES.has(lower)) return true;
     for (const ext of BINARY_EXTENSIONS) {
       if (lower.endsWith(ext)) return true;
     }
@@ -201,12 +248,23 @@ export class WorkspaceScannerService {
     return this.chunkText(filePath, text, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP);
   }
 
+  /**
+   * Rejects obvious binaries: NUL bytes or a high ratio of control characters
+   * in the first chunk (catches extensionless executables and corrupt reads).
+   */
   private looksBinary(bytes: Uint8Array): boolean {
-    const sample = bytes.subarray(0, Math.min(bytes.length, 8000));
+    const maxSample = 16_384;
+    const sample = bytes.subarray(0, Math.min(bytes.length, maxSample));
+    if (sample.length === 0) return false;
+
+    let controlish = 0;
     for (const b of sample) {
       if (b === 0) return true;
+      if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) {
+        controlish++;
+      }
     }
-    return false;
+    return controlish / sample.length > 0.3;
   }
 
   private chunkText(

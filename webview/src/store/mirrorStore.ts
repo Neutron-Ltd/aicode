@@ -36,6 +36,7 @@ export interface MirrorState {
   submitRegister: (email: string, password: string) => void;
   sendUserMessage: () => void;
   requestInsertCode: (code: string) => void;
+  clearChat: () => void;
 }
 
 export const useMirrorStore = create<MirrorState>((set, get) => ({
@@ -190,5 +191,9 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
 
   requestInsertCode: (code: string) => {
     postToHost({ type: "INSERT_CODE", payload: { code } });
+  },
+
+  clearChat: () => {
+    set({ messages: [], chatError: null });
   },
 }));

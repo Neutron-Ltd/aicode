@@ -22,6 +22,10 @@ export function ChatScreen(): React.ReactElement {
   const userLabel = useMirrorStore((s) => s.userLabel);
   const userEmail = useMirrorStore((s) => s.userEmail);
   const chatError = useMirrorStore((s) => s.chatError);
+  const clearChat = useMirrorStore((s) => s.clearChat);
+
+  const clearChatDisabled =
+    messages.length === 0 || isSending;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-mirror-surface">
@@ -34,6 +38,8 @@ export function ChatScreen(): React.ReactElement {
         onPing={sendPing}
         onIndexWorkspace={indexWorkspace}
         isIndexing={isIndexing}
+        onClearChat={clearChat}
+        clearChatDisabled={clearChatDisabled}
         userLabel={userLabel}
         userEmail={userEmail}
       />
@@ -50,7 +56,11 @@ export function ChatScreen(): React.ReactElement {
           {chatError}
         </div>
       ) : null}
-      <MessageList messages={messages} onApplyCode={requestInsertCode} />
+      <MessageList
+        messages={messages}
+        onApplyCode={requestInsertCode}
+        isSending={isSending}
+      />
       <InputArea
         value={inputDraft}
         onChange={setInputDraft}

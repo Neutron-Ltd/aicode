@@ -10,6 +10,8 @@ export function Header({
   onPing,
   onIndexWorkspace,
   isIndexing,
+  onClearChat,
+  clearChatDisabled,
   userLabel,
   userEmail,
 }: {
@@ -21,6 +23,8 @@ export function Header({
   onPing: () => void;
   onIndexWorkspace: () => void;
   isIndexing: boolean;
+  onClearChat: () => void;
+  clearChatDisabled: boolean;
   userLabel: string | null;
   userEmail: string | null;
 }): React.ReactElement {
@@ -74,6 +78,29 @@ export function Header({
           PONG: <span className="text-mirror-fg">{pongLabel}</span>
         </span>
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onClearChat}
+            disabled={clearChatDisabled}
+            aria-label="Clear chat"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
+            title={clearChatDisabled ? "Cannot clear while sending" : "Clear chat"}
+          >
+            <svg
+              aria-hidden
+              className="h-3 w-3 shrink-0 opacity-80"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+              <path d="M10 11v6M14 11v6" />
+            </svg>
+            <span>Clear</span>
+          </button>
           <button
             type="button"
             onClick={onIndexWorkspace}
