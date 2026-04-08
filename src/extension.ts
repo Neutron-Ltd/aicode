@@ -1,0 +1,41 @@
+import * as vscode from "vscode";
+import { ApiService } from "./services/ApiService";
+import { AuthService } from "./services/AuthService";
+import { EditorService } from "./services/EditorService";
+import { PromptBuilderService } from "./services/PromptBuilderService";
+import { MirrorChatViewProvider } from "./MirrorChatViewProvider";
+
+export function activate(context: vscode.ExtensionContext): void {
+  const editorService = new EditorService();
+  const promptBuilder = new PromptBuilderService(editorService);
+
+  const provider = new MirrorChatViewProvider(context);
+  const auth = new AuthService(context, (msg) => provider.postHostMessage(msg));
+  const api = new ApiService(auth, promptBuilder, (msg) =>
+    provider.postHostMessage(msg)
+  );
+  provider.setAuthService(auth);
+  provider.setApiService(api);
+  provider.setEditorService(editorService);
+  provider.setPromptBuilderService(promptBuilder);
+
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri: (uri: vscode.Uri) => auth.handleUri(uri),
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      MirrorChatViewProvider.viewType,
+      provider,
+      {
+        webviewOptions: {
+          retainContextWhenHidden: true,
+        },
+      }
+    )
+  );
+}
+
+export function deactivate(): void {}

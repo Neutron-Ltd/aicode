@@ -1,0 +1,51 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-all",
+      "dependsOn": ["npm: compile", "npm: build:webview"],
+      "problemMatcher": ["$tsc"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "type": "npm",
+      "script": "watch",
+      "group": "build",
+      "problemMatcher": ["$tsc-watch"],
+      "isBackground": true,
+      "label": "npm: watch"
+    },
+    {
+      "type": "npm",
+      "script": "watch:webview",
+      "group": "build",
+      "problemMatcher": [],
+      "isBackground": true,
+      "label": "npm: watch:webview"
+    },
+    {
+      "label": "watch-all",
+      "dependsOn": ["npm: watch", "npm: watch:webview"],
+      "problemMatcher": ["$tsc-watch"],
+      "group": "build",
+      "isBackground": true
+    },
+    {
+      "type": "npm",
+      "script": "compile",
+      "group": "build",
+      "problemMatcher": ["$tsc"],
+      "label": "npm: compile"
+    },
+    {
+      "type": "npm",
+      "script": "build:webview",
+      "group": "build",
+      "problemMatcher": [],
+      "label": "npm: build:webview"
+    }
+  ]
+}

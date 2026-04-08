@@ -1,0 +1,177 @@
+import { create } from "zustand";
+import type { HostToWebviewMessage } from "../../../src/shared/messages";
+import { postToHost } from "../vscodeApi";
+import { MODEL_OPTIONS, type ChatMessage } from "../types/chat";
+
+const SEED_MESSAGE: ChatMessage = {
+  id: "seed-1",
+  role: "assistant",
+  content:
+    'Here is a sample snippet — use **Insert at Cursor** on the code block:\n\n```typescript\nfunction greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n```\n\nSend a message below to try the chat.',
+};
+
+export interface MirrorState {
+  isLoggedIn: boolean;
+  userLabel: string | null;
+  userEmail: string | null;
+  signingIn: boolean;
+  authError: string | null;
+  /** Chat / Edge / network errors (distinct from auth). */
+  chatError: string | null;
+  lastPongAt: number | null;
+  lastPongClientTs: number | null;
+  tokenQuota: number;
+  selectedModelId: string;
+  messages: ChatMessage[];
+  inputDraft: string;
+  isSending: boolean;
+
+  applyHostMessage: (msg: HostToWebviewMessage) => void;
+  setInputDraft: (v: string) => void;
+  setSelectedModelId: (id: string) => void;
+  sendPing: () => void;
+  submitLogin: (email: string, password: string) => void;
+  submitRegister: (email: string, password: string) => void;
+  sendUserMessage: () => void;
+  requestInsertCode: (code: string) => void;
+}
+
+export const useMirrorStore = create<MirrorState>((set, get) => ({
+  isLoggedIn: false,
+  userLabel: null,
+  userEmail: null,
+  signingIn: false,
+  authError: null,
+  chatError: null,
+  lastPongAt: null,
+  lastPongClientTs: null,
+  tokenQuota: 142_000,
+  selectedModelId: MODEL_OPTIONS[0].id,
+  messages: [SEED_MESSAGE],
+  inputDraft: "",
+  isSending: false,
+
+  applyHostMessage: (msg: HostToWebviewMessage) => {
+    switch (msg.type) {
+      case "PONG":
+        set({
+          lastPongAt: msg.payload.ts,
+          lastPongClientTs:
+            msg.payload.clientTs !== undefined ? msg.payload.clientTs : null,
+        });
+        break;
+      case "LOGIN_SUCCESS":
+        set({
+          isLoggedIn: true,
+          signingIn: false,
+          authError: null,
+          userLabel: msg.payload.displayName,
+          userEmail: msg.payload.email ?? null,
+        });
+        break;
+      case "AUTH_ERROR":
+        set({ signingIn: false, authError: msg.payload.message });
+        break;
+      case "UPDATE_QUOTA":
+        set({ tokenQuota: msg.payload.remaining });
+        break;
+      case "RECEIVE_RESPONSE":
+        set((s) => ({
+          messages: [
+            ...s.messages,
+            {
+              id: msg.payload.id,
+              role: "assistant" as const,
+              content: msg.payload.content,
+            },
+          ],
+          isSending: false,
+          chatError: null,
+        }));
+        break;
+      case "CHAT_STREAM_START":
+        set((s) => ({
+          messages: [
+            ...s.messages,
+            {
+              id: msg.payload.id,
+              role: "assistant" as const,
+              content: "",
+            },
+          ],
+          chatError: null,
+        }));
+        break;
+      case "CHAT_STREAM_DELTA":
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === msg.payload.id
+              ? { ...m, content: m.content + msg.payload.delta }
+              : m
+          ),
+        }));
+        break;
+      case "CHAT_STREAM_END":
+        set({ isSending: false });
+        break;
+      case "CHAT_ERROR":
+        set({
+          isSending: false,
+          chatError: msg.payload.message,
+        });
+        break;
+    }
+  },
+
+  setInputDraft: (v: string) => set({ inputDraft: v }),
+
+  setSelectedModelId: (id: string) => set({ selectedModelId: id }),
+
+  sendPing: () => {
+    postToHost({ type: "PING", payload: { clientTs: Date.now() } });
+  },
+
+  submitLogin: (email: string, password: string) => {
+    set({ signingIn: true, authError: null });
+    postToHost({
+      type: "LOGIN_REQUEST",
+      payload: { email, password },
+    });
+  },
+
+  submitRegister: (email: string, password: string) => {
+    set({ signingIn: true, authError: null });
+    postToHost({
+      type: "REGISTER_REQUEST",
+      payload: { email, password },
+    });
+  },
+
+  sendUserMessage: () => {
+    const { inputDraft, selectedModelId } = get();
+    const text = inputDraft.trim();
+    if (!text) return;
+
+    const userMsg: ChatMessage = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      content: text,
+    };
+
+    set((s) => ({
+      messages: [...s.messages, userMsg],
+      inputDraft: "",
+      isSending: true,
+      chatError: null,
+    }));
+
+    postToHost({
+      type: "SEND_MESSAGE",
+      payload: { text, modelId: selectedModelId },
+    });
+  },
+
+  requestInsertCode: (code: string) => {
+    postToHost({ type: "INSERT_CODE", payload: { code } });
+  },
+}));
