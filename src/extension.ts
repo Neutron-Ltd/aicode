@@ -3,11 +3,13 @@ import { ApiService } from "./services/ApiService";
 import { AuthService } from "./services/AuthService";
 import { EditorService } from "./services/EditorService";
 import { PromptBuilderService } from "./services/PromptBuilderService";
+import { TerminalService } from "./services/TerminalService";
 import { MirrorChatViewProvider } from "./MirrorChatViewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   const editorService = new EditorService();
-  const promptBuilder = new PromptBuilderService(editorService);
+  const terminalService = new TerminalService();
+  const promptBuilder = new PromptBuilderService(editorService, terminalService);
 
   const provider = new MirrorChatViewProvider(context);
   const auth = new AuthService(context, (msg) => provider.postHostMessage(msg));
@@ -36,6 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     )
   );
+  context.subscriptions.push(terminalService);
 }
 
 export function deactivate(): void {}

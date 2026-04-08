@@ -1,12 +1,16 @@
 import * as vscode from "vscode";
 import type { ChatPayload } from "../types/chatPayload";
 import type { EditorService } from "./EditorService";
+import type { TerminalService } from "./TerminalService";
 
 /**
  * .mirrorrules and chat payload envelope (Chunk 5).
  */
 export class PromptBuilderService {
-  constructor(private readonly editor: EditorService) {}
+  constructor(
+    private readonly editor: EditorService,
+    private readonly terminal: TerminalService
+  ) {}
 
   /**
    * Reads `.mirrorrules` from the first workspace folder root, if present.
@@ -34,12 +38,13 @@ export class PromptBuilderService {
 
     // TODO: Inject RAG vector context here.
 
-    // TODO: Inject Terminal error state here.
+    const terminalContext = this.terminal.getRecentTerminalContext();
 
     const payload: ChatPayload = {
       query,
       modelId,
       workspaceRules,
+      terminalContext,
       editorContext: {
         fileName: this.editor.getActiveFileName(),
         fullFileText: this.editor.getActiveDocumentText(),

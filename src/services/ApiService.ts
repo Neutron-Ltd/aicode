@@ -157,9 +157,19 @@ export class ApiService {
       return;
     }
     try {
-      const parsed = JSON.parse(data) as { delta?: string; error?: string };
+      const parsed = JSON.parse(data) as {
+        delta?: string;
+        error?: string;
+        remaining_tokens?: number;
+      };
       if (typeof parsed.error === "string" && parsed.error.length > 0) {
         throw new Error(parsed.error);
+      }
+      if (typeof parsed.remaining_tokens === "number") {
+        this.postToWebview({
+          type: "UPDATE_QUOTA",
+          payload: { remaining: parsed.remaining_tokens },
+        });
       }
       if (typeof parsed.delta === "string") {
         this.postToWebview({

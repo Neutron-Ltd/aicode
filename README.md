@@ -98,22 +98,22 @@ In the Supabase dashboard: **Authentication → Providers → Email**. Enable th
 
 ### 3. Deploy the `chat` Edge Function
 
-The repository includes a deployable stub at [`supabase/functions/chat/index.ts`](supabase/functions/chat/index.ts).
+The Edge Function at [`supabase/functions/chat/index.ts`](supabase/functions/chat/index.ts) verifies the user JWT, builds an OpenAI-style message list from your payload, calls **302.ai** at `https://api.302.ai/v1/chat/completions` with **`stream: true`**, and rewrites the upstream SSE into Mirror’s `data: {"delta":"..."}` format.
 
 ```bash
-# From your machine, with Supabase CLI linked to this project
+supabase secrets set AI_UPSTREAM_KEY=<your_302.ai_api_key>
 supabase functions deploy chat
 ```
 
-The function expects:
+**Secrets / env:**
 
-- **`SUPABASE_URL`** and **`SUPABASE_ANON_KEY`** — provided automatically in the Edge runtime when deployed on Supabase.
-- Optional **`AI_UPSTREAM_KEY`** — for wiring a real **302.ai** (or other) call server-side; **do not** put this key in the extension.
+- **`SUPABASE_URL`** and **`SUPABASE_ANON_KEY`** — injected automatically when deployed on Supabase.
+- **`AI_UPSTREAM_KEY`** — required for live AI; your **302.ai** API key. Never put this in the extension.
 
 **Contract (summary):**
 
 - **Request:** `POST`, JSON body matching [`src/types/chatPayload.ts`](src/types/chatPayload.ts) (`query`, `modelId`, `workspaceRules`, `editorContext`).
-- **Response:** `text/event-stream` with SSE lines `data: {"delta":"..."}` and optional `data: [DONE]`.
+- **Response:** `text/event-stream` with SSE lines `data: {"delta":"..."}` and `data: [DONE]`.
 
 See the file header in `supabase/functions/chat/index.ts` for the full contract.
 
