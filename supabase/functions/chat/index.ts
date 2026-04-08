@@ -147,7 +147,18 @@ async function* transformUpstreamStreamToMirrorSSE(
             choices?: Array<{
               delta?: { content?: string | null };
             }>;
+            usage?: { total_tokens?: number };
           };
+          const hasEmptyChoices =
+            Array.isArray(chunk.choices) && chunk.choices.length === 0;
+          const totalTokens = chunk.usage?.total_tokens;
+          // Final usage chunk from upstream: no choices + usage totals.
+          if (hasEmptyChoices && typeof totalTokens === "number") {
+            yield encoder.encode(
+              `data: ${JSON.stringify({ usage_total_tokens: totalTokens })}\n\n`,
+            );
+            continue;
+          }
           const piece = chunk.choices?.[0]?.delta?.content;
           if (typeof piece === "string" && piece.length > 0) {
             yield encoder.encode(
@@ -170,7 +181,17 @@ async function* transformUpstreamStreamToMirrorSSE(
           try {
             const chunk = JSON.parse(data) as {
               choices?: Array<{ delta?: { content?: string | null } }>;
+              usage?: { total_tokens?: number };
             };
+            const hasEmptyChoices =
+              Array.isArray(chunk.choices) && chunk.choices.length === 0;
+            const totalTokens = chunk.usage?.total_tokens;
+            if (hasEmptyChoices && typeof totalTokens === "number") {
+              yield encoder.encode(
+                `data: ${JSON.stringify({ usage_total_tokens: totalTokens })}\n\n`,
+              );
+              continue;
+            }
             const piece = chunk.choices?.[0]?.delta?.content;
             if (typeof piece === "string" && piece.length > 0) {
               yield encoder.encode(
@@ -293,6 +314,9 @@ async function handler(req: Request): Promise<Response> {
       model,
       messages,
       stream: true,
+      stream_options: {
+        include_usage: true,
+      },
     }),
   });
 
@@ -316,7 +340,7 @@ async function handler(req: Request): Promise<Response> {
   const outputStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
-      let usedChars = 0;
+      let usedTokensExact: number | null = null;
       try {
         for await (const chunk of transformUpstreamStreamToMirrorSSE(
           upstreamBody,
@@ -325,22 +349,39 @@ async function handler(req: Request): Promise<Response> {
           const match = /^data:\s*(.+)$/m.exec(text);
           if (match && match[1] && match[1] !== "[DONE]") {
             try {
-              const parsed = JSON.parse(match[1]) as { delta?: string };
-              if (typeof parsed.delta === "string") {
-                usedChars += parsed.delta.length;
+              const parsed = JSON.parse(match[1]) as {
+                usage_total_tokens?: number;
+              };
+              if (typeof parsed.usage_total_tokens === "number") {
+                usedTokensExact = parsed.usage_total_tokens;
               }
             } catch {
-              // ignore parse failures on chunk accounting
+              // ignore parse failures on usage accounting
             }
           }
           controller.enqueue(chunk);
         }
 
-        const usedTokens = Math.max(1, Math.ceil(usedChars / 4));
+        if (usedTokensExact === null) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                error:
+                  "Upstream stream ended without usage.total_tokens; quota was not deducted.",
+              })}\n\n`,
+            ),
+          );
+          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+          return;
+        }
+
         const { data: updatedQuota, error: deductError } = await dbClient
           .from("user_quotas")
           .update({
-            remaining_tokens: Math.max(0, quotaRow.remaining_tokens - usedTokens),
+            remaining_tokens: Math.max(
+              0,
+              quotaRow.remaining_tokens - usedTokensExact,
+            ),
           })
           .eq("user_id", user.id)
           .select("remaining_tokens")
