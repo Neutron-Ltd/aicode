@@ -8,6 +8,8 @@ export function Header({
   tokenQuota,
   lastPongAt,
   onPing,
+  onIndexWorkspace,
+  isIndexing,
   userLabel,
   userEmail,
 }: {
@@ -17,6 +19,8 @@ export function Header({
   tokenQuota: number;
   lastPongAt: number | null;
   onPing: () => void;
+  onIndexWorkspace: () => void;
+  isIndexing: boolean;
   userLabel: string | null;
   userEmail: string | null;
 }): React.ReactElement {
@@ -69,13 +73,26 @@ export function Header({
         <span className="truncate font-mono text-[10px] text-mirror-muted">
           PONG: <span className="text-mirror-fg">{pongLabel}</span>
         </span>
-        <button
-          type="button"
-          onClick={onPing}
-          className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus"
-        >
-          Ping
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onIndexWorkspace}
+            disabled={isIndexing}
+            aria-busy={isIndexing}
+            aria-label="Index workspace"
+            className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus disabled:cursor-not-allowed disabled:opacity-60"
+            title={isIndexing ? "Indexing workspace..." : "Index Workspace"}
+          >
+            {isIndexing ? "Indexing..." : "Index Workspace"}
+          </button>
+          <button
+            type="button"
+            onClick={onPing}
+            className="shrink-0 rounded-md border border-mirror-border px-2 py-0.5 text-[10px] font-medium text-mirror-fg transition-colors duration-200 hover:bg-mirror-input focus:outline-none focus:ring-2 focus:ring-mirror-focus"
+          >
+            Ping
+          </button>
+        </div>
       </div>
     </header>
   );

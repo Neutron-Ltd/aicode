@@ -1,197 +1,243 @@
 # Mirror
 
-**Mirror** is an AI coding assistant for Visual Studio Code. It pairs a **TypeScript extension host** with a **React + Tailwind** sidebar webview, authenticates users with **Supabase Auth** (email and password in the extension UI), and routes chat requests through a **Supabase Edge Function** so upstream API keys (for example **302.ai**) never ship inside the extension.
+**Mirror** is an AI coding assistant for Visual Studio Code. It combines a **TypeScript extension host** with a **React + Tailwind** sidebar webview, uses **Supabase Auth** for native in-extension login, and routes AI calls through **Supabase Edge Functions** so provider keys (e.g. 302.ai) never ship in the extension.
 
-**Version:** 0.0.1 · **Publisher ID:** `mirror` (see `package.json`)
+**Version:** `0.0.1`  
+**Publisher ID:** `mirror` (from `package.json`)
+
+---
+
+## What’s implemented
+
+- Native **email/password auth** in the webview (Supabase).
+- Streaming chat with typed host/webview protocol.
+- Editor integration:
+  - active file + selection context
+  - **Insert at Cursor** for generated code blocks.
+- Prompt enrichment:
+  - `.mirrorrules` support
+  - rolling terminal context capture.
+- Quota flow:
+  - enforced in edge (`public.user_quotas`)
+  - updates sent back to webview header via `UPDATE_QUOTA`.
+- RAG foundation:
+  - pgvector migration (`workspace_documents`, RLS, `match_documents`)
+  - workspace scanner + chunker
+  - `embed` edge function for embeddings storage
+  - `chat` edge retrieval injection (`## Codebase Context`).
+- UI indexing integration:
+  - **Index Workspace** button
+  - loading state while indexing
+  - index status/error events wired through the same message bridge.
+
+---
+
+## Architecture (current)
+
+```text
+┌──────────────────────────────┐      postMessage       ┌─────────────────────────────┐
+│ Extension Host (TypeScript)  │ ◄────────────────────► │ React Webview (Sidebar)     │
+│ - AuthService                │   typed protocol       │ - LoginScreen / ChatScreen  │
+│ - ApiService                 │   (src/shared/messages)│ - Zustand store             │
+│ - PromptBuilderService       │                        │ - Header + MessageList       │
+│ - EditorService              │                        │ - Index Workspace button     │
+│ - TerminalService            │                        └─────────────────────────────┘
+│ - WorkspaceScannerService    │
+└───────────────┬──────────────┘
+                │ HTTPS + JWT + anon key
+                ▼
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ Supabase                                                                     │
+│ - Auth (session in SecretStorage adapter)                                    │
+│ - Postgres + pgvector (`workspace_documents`, `match_documents`)             │
+│ - Edge Functions:                                                             │
+│    /chat  -> retrieval + streamed LLM response + quota deduction             │
+│    /embed -> chunk embeddings + vector persistence                           │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Features
 
-- **Chat sidebar** — Multi-model selection, markdown replies with syntax highlighting, and a **Remaining tokens** display in the header (placeholder until your backend drives `UPDATE_QUOTA`).
-- **Streaming replies** — Assistant text streams in via typed `postMessage` events (`CHAT_STREAM_*`) for a live typing effect.
-- **Editor context** — Prompts include the active file name, full document text, and current selection (see `PromptBuilderService` / `EditorService`).
-- **Insert at Cursor** — Each fenced code block in assistant messages exposes an **Insert at Cursor** control that sends code to the active editor.
-- **Workspace rules** — If `.mirrorrules` exists at the **workspace root**, its contents are included in the chat payload.
-- **Secure by design** — Only the Supabase **anon** key is configured in VS Code settings; the user **JWT** is sent with Edge requests. **302.ai** (or other upstream) keys belong in Edge Function secrets / environment only.
-
----
-
-## Architecture
-
-```text
-┌─────────────────────┐     postMessage      ┌──────────────────────────┐
-│  Extension Host     │ ◄──────────────────► │  React webview (sidebar)  │
-│  AuthService        │   typed protocol     │  Zustand + Tailwind       │
-│  ApiService         │   (messages.ts)      │  LoginScreen / ChatScreen │
-│  EditorService      │                      └──────────────────────────┘
-│  PromptBuilderService
-└──────────┬──────────┘
-           │ HTTPS + JWT + apikey
-           ▼
-┌──────────────────────────┐      ┌─────────────────────────────┐
-│  Supabase Auth           │      │  Edge Function `chat`       │
-│  (session in secrets)    │      │  SSE stream, upstream AI keys │
-└──────────────────────────┘      └─────────────────────────────┘
-```
-
-- **Bridge:** All webview ↔ host traffic uses the discriminated union types in [`src/shared/messages.ts`](src/shared/messages.ts).
-- **Chat transport:** [`src/services/ApiService.ts`](src/services/ApiService.ts) calls `POST {supabaseUrl}/functions/v1/chat` with `Authorization: Bearer <access_token>` and `apikey: <anon key>`, then parses **SSE** (`data: {"delta":"..."}`) or falls back to non-streaming JSON.
+- **Chat & model selection** in sidebar header.
+- **Token quota display** with live updates from edge responses.
+- **Markdown + syntax-highlighted replies**.
+- **Insert at Cursor** button in each rendered code block.
+- **Terminal-aware prompting** (recent terminal output).
+- **Workspace indexing workflow**:
+  - scans workspace recursively
+  - respects `.gitignore`
+  - hard-skips heavy dirs (`.git`, `node_modules`, `dist`, `build`)
+  - chunks files with overlap
+  - sends chunks to `/functions/v1/embed`.
+- **RAG retrieval in chat**:
+  - embeds incoming query
+  - fetches top matches from `match_documents`
+  - injects snippets into prompt as codebase context.
 
 ---
 
 ## Requirements
 
-- **VS Code** `^1.85.0` (see `engines` in `package.json`)
-- **Node.js** 18+ and npm (for development and packaging)
+- **VS Code** `^1.85.0`
+- **Node.js** 18+ and npm
+- Supabase project with Edge Functions enabled
 
 ---
 
 ## Installation
 
-### From source (development)
+### From source
 
-1. Clone this repository.
+1. Clone repo
 2. `npm install`
-3. `npm run compile` — compile the extension (`out/`)
-4. `npm run build:webview` — build the webview bundle and CSS into `media/`
-5. In VS Code, **Run → Start Debugging** (or F5) with the **Launch Extension** configuration to open an Extension Development Host with Mirror loaded.
+3. `npm run compile`
+4. `npm run build:webview`
+5. Launch extension in VS Code via **Run/Debug** (F5)
 
-### VSIX (local or CI)
+### Package as VSIX
 
 ```bash
-npm run vscode:prepublish   # compile + build:webview
+npm run vscode:prepublish
 npx @vscode/vsce package
 ```
 
-Install the generated `.vsix` via **Extensions → … → Install from VSIX…**.
-
-### Marketplace
-
-When published, install **Mirror** from the VS Code Marketplace (publisher: `mirror`). *(Update this section with the marketplace link once available.)*
+Install via **Extensions → … → Install from VSIX…**.
 
 ---
 
 ## Configuration
 
-Open **Settings** and search for **Mirror**, or edit `settings.json`:
+Configure in VS Code settings:
 
 | Setting | Description |
-|--------|-------------|
-| `mirror.supabaseUrl` | Supabase project URL (**Settings → API → Project URL**). |
-| `mirror.supabaseAnonKey` | Supabase **anon (public)** key — never use the `service_role` key in the client. |
-| `mirror.authProvider` | OAuth provider id (e.g. `github`) used only if you invoke the legacy OAuth flow from code; the default login UI uses **email/password**. |
+|---|---|
+| `mirror.supabaseUrl` | Supabase project URL |
+| `mirror.supabaseAnonKey` | Supabase anon public key (never use service_role in client) |
+| `mirror.authProvider` | Legacy OAuth provider id (optional/legacy path) |
 
 ---
 
 ## Supabase setup
 
-### 1. Create a project
+### 1) Auth
 
-Create a project in [Supabase](https://supabase.com) and copy the **Project URL** and **anon public** key into the Mirror settings above.
+- Enable **Email** provider in Supabase Auth.
+- Extension uses native email/password forms.
+- (Legacy optional) OAuth redirect: `vscode://mirror.mirror/auth`.
 
-### 2. Enable Email auth
+### 2) Database migration (pgvector + RLS)
 
-In the Supabase dashboard: **Authentication → Providers → Email**. Enable the email provider so users can sign up and sign in from the extension’s login form.
+Apply migration:
 
-- If **email confirmation** is required, new users may need to confirm by email before a session is issued; the extension surfaces the message returned by Supabase.
+- [`supabase/migrations/20240101_init_vector.sql`](supabase/migrations/20240101_init_vector.sql)
 
-### 3. Deploy the `chat` Edge Function
+It creates:
 
-The Edge Function at [`supabase/functions/chat/index.ts`](supabase/functions/chat/index.ts) verifies the user JWT, builds an OpenAI-style message list from your payload, calls **302.ai** at `https://api.302.ai/v1/chat/completions` with **`stream: true`**, and rewrites the upstream SSE into Mirror’s `data: {"delta":"..."}` format.
+- `public.workspace_documents` with `embedding vector(1536)`
+- strict RLS policies (`user_id = auth.uid()`)
+- `public.match_documents(query_embedding, match_threshold, match_count)`.
+
+### 3) Edge Functions
+
+Deploy both functions:
 
 ```bash
-supabase secrets set AI_UPSTREAM_KEY=<your_302.ai_api_key>
+supabase secrets set AI_UPSTREAM_KEY=<your_302_ai_key>
+supabase functions deploy embed
 supabase functions deploy chat
 ```
 
-**Secrets / env:**
+#### `embed` function
 
-- **`SUPABASE_URL`** and **`SUPABASE_ANON_KEY`** — injected automatically when deployed on Supabase.
-- **`AI_UPSTREAM_KEY`** — required for live AI; your **302.ai** API key. Never put this in the extension.
+- File: [`supabase/functions/embed/index.ts`](supabase/functions/embed/index.ts)
+- Input: `{ chunks: [{ file_path, content, chunk_index }] }`
+- Behavior:
+  - verifies JWT
+  - batches embedding requests to `https://api.302.ai/v1/embeddings` (`text-embedding-3-small`)
+  - persists vectors to `workspace_documents` under RLS user scope.
 
-**Contract (summary):**
+#### `chat` function
 
-- **Request:** `POST`, JSON body matching [`src/types/chatPayload.ts`](src/types/chatPayload.ts) (`query`, `modelId`, `workspaceRules`, `editorContext`).
-- **Response:** `text/event-stream` with SSE lines `data: {"delta":"..."}` and `data: [DONE]`.
-
-See the file header in `supabase/functions/chat/index.ts` for the full contract.
-
-### 4. Optional: OAuth redirect (legacy)
-
-If you still use **OAuth** via `signInWithOAuth` and the URI handler, add this redirect URL in Supabase **Authentication → URL Configuration → Redirect URLs**:
-
-`vscode://mirror.mirror/auth`
+- File: [`supabase/functions/chat/index.ts`](supabase/functions/chat/index.ts)
+- Behavior:
+  - verifies JWT
+  - checks quota in `public.user_quotas`
+  - embeds user query and retrieves relevant docs via `match_documents`
+  - injects `Codebase Context` into prompt
+  - streams response as SSE
+  - parses usage totals and deducts quota
+  - emits `remaining_tokens` SSE payload for UI updates.
 
 ---
 
 ## Usage
 
-1. Set **`mirror.supabaseUrl`** and **`mirror.supabaseAnonKey`**.
-2. Open the **Mirror** view from the activity bar (**Mirror** icon → **Mirror Chat**).
-3. **Log In** or **Create Account** with email and password.
-4. Choose a **model** in the header, type a message, and send. Use **Insert at Cursor** on code blocks to paste into the active editor.
+1. Set `mirror.supabaseUrl` and `mirror.supabaseAnonKey`.
+2. Open **Mirror Chat** in activity bar.
+3. Log in (or create account).
+4. Click **Index Workspace** to build/update vector index.
+5. Send chat prompts; use **Insert at Cursor** to apply code.
 
-**`.mirrorrules`:** Place a file named `.mirrorrules` in the **root of the first workspace folder** (UTF-8 text). Content is appended to the structured payload sent to the Edge Function.
+Prompt inputs include:
+
+- `.mirrorrules` (workspace root)
+- editor context (file + selection)
+- terminal context
+- retrieved codebase context (if indexed docs are available).
 
 ---
 
 ## Development
 
 | Script | Purpose |
-|--------|---------|
-| `npm run compile` | TypeScript compile for `src/` → `out/` |
-| `npm run watch` | Watch mode for the extension |
-| `npm run build:webview` | esbuild bundle + Tailwind CSS → `media/` |
+|---|---|
+| `npm run compile` | Compile extension host TS (`src` → `out`) |
+| `npm run watch` | Compile host in watch mode |
+| `npm run build:webview` | Build webview JS/CSS into `media` |
 | `npm run watch:webview` | Watch webview build |
-| `npm run vscode:prepublish` | Prepublish: compile + webview build |
+| `npm run vscode:prepublish` | Prepublish build pipeline |
 
-**Layout:**
+Project layout:
 
-- `src/` — Extension host (services, `MirrorChatViewProvider`, shared message types)
-- `webview/src/` — React app
-- `media/` — Built webview assets (generated)
-- `supabase/functions/chat/` — Edge Function source
+- `src/` — extension host and services
+- `webview/src/` — React UI
+- `media/` — built webview assets
+- `supabase/migrations/` — SQL migrations
+- `supabase/functions/chat/` — chat edge function
+- `supabase/functions/embed/` — embeddings edge function
 
 ---
 
-## Security and privacy
+## Security notes
 
-- **Passwords** are sent only from the webview to the extension host over the internal bridge and to Supabase for `signInWithPassword` / `signUp`; they are not stored in extension source or in a custom plaintext file.
-- **Session material** is persisted through the Supabase client’s storage adapter backed by **`vscode.SecretStorage`** (see `AuthService`).
-- **Upstream API keys** (302.ai, etc.) must live **only** in Supabase Edge secrets or environment — never in the VS Code workspace or extension package.
+- User passwords are only used for Supabase auth and not stored as plaintext in project files.
+- Session persistence uses VS Code `SecretStorage` via the Supabase storage adapter.
+- Upstream provider keys (`AI_UPSTREAM_KEY`, etc.) must remain server-side in Supabase secrets.
+- DB reads/writes for indexing and retrieval rely on JWT + RLS isolation.
 
 ---
 
 ## Troubleshooting
 
-| Issue | What to check |
-|-------|----------------|
-| “Set mirror.supabaseUrl…” | Fill both URL and anon key in Settings. |
-| Auth errors | Email provider enabled; correct keys; email confirmation settings in Supabase. |
-| Chat / network errors | Edge Function `chat` deployed; user is logged in; function logs in Supabase dashboard. |
-| Insert at Cursor does nothing | Open a text editor and place the cursor where code should go. |
-
----
-
-## Roadmap
-
-Phase 2 ideas (from the product plan): richer **RAG / codebase indexing**, **terminal** context, and server-driven **token quota** updates via `UPDATE_QUOTA`.
+| Issue | Check |
+|---|---|
+| Missing Supabase config | Set both `mirror.supabaseUrl` and `mirror.supabaseAnonKey` |
+| Login fails | Email provider enabled and project keys correct |
+| Indexing fails | `embed` deployed, `AI_UPSTREAM_KEY` set, user authenticated |
+| Chat without RAG context | Ensure workspace indexed and vectors exist for current user |
+| Quota errors | Check `public.user_quotas` row exists and has remaining tokens |
+| Insert at Cursor no-op | Ensure an active text editor and cursor location |
 
 ---
 
 ## Disclaimer
 
-AI-generated code can be incorrect or unsafe. You are responsible for reviewing and testing anything inserted into your project. Mirror is provided as-is, without warranty.
-
----
-
-## Contributing
-
-Issues and pull requests are welcome once a public repository and license are published. *(Add repository URL and contribution guidelines as needed.)*
+AI output may be incorrect or unsafe. Always review and test generated code before applying in production.
 
 ---
 
 ## License
 
-This repository does not yet include a `LICENSE` file. Add an explicit license (for example MIT or Apache-2.0) before publishing to the Marketplace or redistributing the extension.
+No `LICENSE` file is currently included. Add one (e.g. MIT/Apache-2.0) before wider distribution.

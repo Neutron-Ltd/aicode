@@ -4,6 +4,7 @@ import { AuthService } from "./services/AuthService";
 import { EditorService } from "./services/EditorService";
 import { PromptBuilderService } from "./services/PromptBuilderService";
 import { TerminalService } from "./services/TerminalService";
+import { WorkspaceScannerService } from "./services/WorkspaceScannerService";
 import { MirrorChatViewProvider } from "./MirrorChatViewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -16,8 +17,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const api = new ApiService(auth, promptBuilder, (msg) =>
     provider.postHostMessage(msg)
   );
+  const scanner = new WorkspaceScannerService(auth, (msg) =>
+    provider.postHostMessage(msg)
+  );
   provider.setAuthService(auth);
   provider.setApiService(api);
+  provider.setWorkspaceScannerService(scanner);
   provider.setEditorService(editorService);
   provider.setPromptBuilderService(promptBuilder);
 

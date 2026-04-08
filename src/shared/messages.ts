@@ -10,6 +10,7 @@ export type WebviewToHostMessage =
   | { type: "LOGIN_REQUEST"; payload: { email: string; password: string } }
   | { type: "REGISTER_REQUEST"; payload: { email: string; password: string } }
   | { type: "SEND_MESSAGE"; payload: { text: string; modelId: string } }
+  | { type: "INDEX_WORKSPACE" }
   | { type: "INSERT_CODE"; payload: { code: string } };
 
 export type HostToWebviewMessage =
@@ -31,7 +32,10 @@ export type HostToWebviewMessage =
   /** Stream finished successfully. */
   | { type: "CHAT_STREAM_END"; payload: { id: string } }
   /** Chat / Edge / network failure (distinct from AUTH_ERROR). */
-  | { type: "CHAT_ERROR"; payload: { message: string } };
+  | { type: "CHAT_ERROR"; payload: { message: string } }
+  | { type: "INDEX_STARTED" }
+  | { type: "INDEX_COMPLETE"; payload: { files: number; chunks: number } }
+  | { type: "INDEX_ERROR"; payload: { message: string } };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -69,6 +73,8 @@ export function parseWebviewMessage(raw: unknown): WebviewToHostMessage | null {
       if (!email || !password) return null;
       return { type: "REGISTER_REQUEST", payload: { email, password } };
     }
+    case "INDEX_WORKSPACE":
+      return { type: "INDEX_WORKSPACE" };
     case "SEND_MESSAGE": {
       const p = raw.payload;
       if (!isRecord(p)) return null;
@@ -163,6 +169,23 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       const message = p.message;
       if (typeof message !== "string") return null;
       return { type: "CHAT_ERROR", payload: { message } };
+    }
+    case "INDEX_STARTED":
+      return { type: "INDEX_STARTED" };
+    case "INDEX_COMPLETE": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const files = p.files;
+      const chunks = p.chunks;
+      if (typeof files !== "number" || typeof chunks !== "number") return null;
+      return { type: "INDEX_COMPLETE", payload: { files, chunks } };
+    }
+    case "INDEX_ERROR": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const message = p.message;
+      if (typeof message !== "string") return null;
+      return { type: "INDEX_ERROR", payload: { message } };
     }
     default:
       return null;

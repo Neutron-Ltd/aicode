@@ -3,6 +3,7 @@ import type { ApiService } from "./services/ApiService";
 import type { AuthService } from "./services/AuthService";
 import type { EditorService } from "./services/EditorService";
 import type { PromptBuilderService } from "./services/PromptBuilderService";
+import type { WorkspaceScannerService } from "./services/WorkspaceScannerService";
 import {
   parseWebviewMessage,
   type HostToWebviewMessage,
@@ -21,6 +22,7 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
   /** Used by ApiService in Chunk 6. */
   private _promptBuilder: PromptBuilderService | undefined;
   private _api: ApiService | undefined;
+  private _workspaceScanner: WorkspaceScannerService | undefined;
 
   constructor(private readonly _context: vscode.ExtensionContext) {}
 
@@ -39,6 +41,10 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
 
   setApiService(api: ApiService): void {
     this._api = api;
+  }
+
+  setWorkspaceScannerService(scanner: WorkspaceScannerService): void {
+    this._workspaceScanner = scanner;
   }
 
   /** Post a host→webview protocol message (e.g. LOGIN_SUCCESS from OAuth). */
@@ -161,6 +167,22 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
       case "INSERT_CODE":
         void this._insertCodeAtCursor(msg.payload.code);
         break;
+      case "INDEX_WORKSPACE": {
+        const scanner = this._workspaceScanner;
+        if (!scanner) {
+          void w.postMessage({
+            type: "INDEX_ERROR",
+            payload: { message: "Workspace scanner not ready." },
+          });
+          break;
+        }
+        void scanner.indexWorkspace().catch((err: unknown) => {
+          const message =
+            err instanceof Error ? err.message : "Workspace indexing failed.";
+          void w.postMessage({ type: "INDEX_ERROR", payload: { message } });
+        });
+        break;
+      }
     }
   }
 

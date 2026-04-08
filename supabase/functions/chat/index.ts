@@ -16,6 +16,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 /** 302.ai OpenAI-compatible chat endpoint */
 const UPSTREAM_CHAT_URL = "https://api.302.ai/v1/chat/completions";
+const UPSTREAM_EMBEDDINGS_URL = "https://api.302.ai/v1/embeddings";
+const EMBEDDING_MODEL = "text-embedding-3-small";
 
 /** Avoid sending huge files on every request (tune as needed). */
 const MAX_EDITOR_FILE_CHARS = 120_000;
@@ -62,7 +64,10 @@ interface OpenAIChatMessage {
 /**
  * Turn workspace rules + editor snapshot + user query into OpenAI-style messages.
  */
-function buildOpenAIMessages(payload: ChatPayload): OpenAIChatMessage[] {
+function buildOpenAIMessages(
+  payload: ChatPayload,
+  codebaseContext: string
+): OpenAIChatMessage[] {
   const { query, workspaceRules, editorContext, terminalContext } = payload;
   const { fileName, fullFileText, selectedText } = editorContext;
 
@@ -98,12 +103,41 @@ function buildOpenAIMessages(payload: ChatPayload): OpenAIChatMessage[] {
     terminalContext?.combinedText?.trim()
       ? terminalContext.combinedText
       : "(no terminal output captured)",
+    "",
+    "## Codebase Context",
+    codebaseContext.trim() ? codebaseContext : "(no relevant indexed chunks found)",
   ].join("\n");
 
   return [
     { role: "system", content: systemContent },
     { role: "user", content: query },
   ];
+}
+
+async function embedText(apiKey: string, input: string): Promise<number[]> {
+  const response = await fetch(UPSTREAM_EMBEDDINGS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: EMBEDDING_MODEL,
+      input,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => response.statusText);
+    throw new Error(`Query embedding failed (${response.status}): ${detail}`);
+  }
+  const parsed = (await response.json()) as {
+    data?: Array<{ embedding?: number[] }>;
+  };
+  const vec = parsed.data?.[0]?.embedding;
+  if (!Array.isArray(vec) || vec.length !== 1536) {
+    throw new Error("Invalid query embedding dimension.");
+  }
+  return vec;
 }
 
 /**
@@ -301,7 +335,45 @@ async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const messages = buildOpenAIMessages(payload);
+  let codebaseContext = "";
+  try {
+    const queryEmbedding = await embedText(apiKey, payload.query);
+    const { data: matches, error: matchErr } = await dbClient.rpc(
+      "match_documents",
+      {
+        query_embedding: queryEmbedding,
+        match_threshold: 0.65,
+        match_count: 5,
+      }
+    );
+    if (matchErr) {
+      console.warn("match_documents failed:", matchErr.message);
+    } else if (Array.isArray(matches) && matches.length > 0) {
+      codebaseContext = matches
+        .map((m: { file_path?: string; content?: string; similarity?: number }) => {
+          const path = typeof m.file_path === "string" ? m.file_path : "(unknown)";
+          const content = typeof m.content === "string" ? m.content : "";
+          const similarity =
+            typeof m.similarity === "number"
+              ? m.similarity.toFixed(3)
+              : "n/a";
+          return [
+            `### ${path} (similarity: ${similarity})`,
+            "```text",
+            content.slice(0, 4000),
+            "```",
+          ].join("\n");
+        })
+        .join("\n\n");
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("RAG retrieval fallback:", msg);
+    // graceful fallback: continue chat without codebase context
+    codebaseContext = "";
+  }
+
+  const messages = buildOpenAIMessages(payload, codebaseContext);
 
   const upstreamResponse = await fetch(UPSTREAM_CHAT_URL, {
     method: "POST",

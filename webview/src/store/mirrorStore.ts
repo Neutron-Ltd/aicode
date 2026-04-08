@@ -21,6 +21,7 @@ export interface MirrorState {
   lastPongAt: number | null;
   lastPongClientTs: number | null;
   tokenQuota: number;
+  isIndexing: boolean;
   selectedModelId: string;
   messages: ChatMessage[];
   inputDraft: string;
@@ -30,6 +31,7 @@ export interface MirrorState {
   setInputDraft: (v: string) => void;
   setSelectedModelId: (id: string) => void;
   sendPing: () => void;
+  indexWorkspace: () => void;
   submitLogin: (email: string, password: string) => void;
   submitRegister: (email: string, password: string) => void;
   sendUserMessage: () => void;
@@ -46,6 +48,7 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
   lastPongAt: null,
   lastPongClientTs: null,
   tokenQuota: 142_000,
+  isIndexing: false,
   selectedModelId: MODEL_OPTIONS[0].id,
   messages: [SEED_MESSAGE],
   inputDraft: "",
@@ -74,6 +77,15 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
         break;
       case "UPDATE_QUOTA":
         set({ tokenQuota: msg.payload.remaining });
+        break;
+      case "INDEX_STARTED":
+        set({ isIndexing: true, chatError: null });
+        break;
+      case "INDEX_COMPLETE":
+        set({ isIndexing: false, chatError: null });
+        break;
+      case "INDEX_ERROR":
+        set({ isIndexing: false, chatError: msg.payload.message });
         break;
       case "RECEIVE_RESPONSE":
         set((s) => ({
@@ -129,6 +141,11 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
 
   sendPing: () => {
     postToHost({ type: "PING", payload: { clientTs: Date.now() } });
+  },
+
+  indexWorkspace: () => {
+    set({ isIndexing: true, chatError: null });
+    postToHost({ type: "INDEX_WORKSPACE" });
   },
 
   submitLogin: (email: string, password: string) => {
