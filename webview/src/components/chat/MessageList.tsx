@@ -29,19 +29,29 @@ export function MessageList({
 
   if (messages.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center px-4 py-12 text-center">
-        <p className="max-w-[18rem] text-[13px] leading-relaxed" style={{ color: "var(--vscode-descriptionForeground)" }}>
-          Ask Mirror anything about your code.
-        </p>
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-6 py-16">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.35]"
+          style={{
+            background:
+              "radial-gradient(ellipse 70% 50% at 50% 50%, rgba(99, 102, 241, 0.08), transparent)",
+          }}
+          aria-hidden
+        />
+        <div
+          className="relative h-px w-12 rounded-full"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent, color-mix(in srgb, var(--vscode-descriptionForeground) 35%, transparent), transparent)",
+          }}
+          aria-hidden
+        />
       </div>
     );
   }
 
   return (
-    <div
-      className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-3 py-4"
-      style={{ backgroundColor: "var(--vscode-sideBar-background)" }}
-    >
+    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-transparent px-3 py-4">
       {messages.map((m) => {
         if (m.role === "assistant" && m.content === "" && isSending) {
           return null;

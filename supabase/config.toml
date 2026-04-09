@@ -1,0 +1,5 @@
+# Mirror — Supabase local / deploy config
+# Disable gateway JWT verification for `chat` so the function validates the user JWT in code
+# (avoids 401 from the API gateway with publishable keys / custom auth flows).
+[functions.chat]
+verify_jwt = false

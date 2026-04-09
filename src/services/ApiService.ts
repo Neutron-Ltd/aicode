@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import type { HostToWebviewMessage } from "../shared/messages";
 import type { AuthService } from "./AuthService";
-import { getMirrorSupabaseConfig } from "./AuthService";
 import type { PromptBuilderService } from "./PromptBuilderService";
 
 /**
@@ -25,8 +25,9 @@ export class ApiService {
   ) {}
 
   async sendChatMessage(query: string, modelId: string): Promise<void> {
-    const { url, key } = getMirrorSupabaseConfig();
-    if (!url || !key) {
+    const url = SUPABASE_URL.trim();
+    const anonKey = SUPABASE_ANON_KEY.trim();
+    if (!url || !anonKey) {
       const message =
         "Mirror is not configured. Backend URL and key are missing in the extension build.";
       this.postChatError(message);
@@ -71,7 +72,7 @@ export class ApiService {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
-          apikey: key,
+          apikey: anonKey,
           "Content-Type": "application/json",
           Accept: "text/event-stream, application/json",
         },

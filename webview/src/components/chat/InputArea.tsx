@@ -39,10 +39,7 @@ export function InputArea({
   };
 
   return (
-    <div
-      className="shrink-0 px-3 pb-3 pt-2"
-      style={{ backgroundColor: "var(--vscode-sideBar-background)" }}
-    >
+    <div className="shrink-0 bg-transparent px-3 pb-3 pt-2">
       <div
         className="flex items-end gap-2 rounded-xl border px-2 py-1.5 transition-[box-shadow] duration-200 ease-out focus-within:ring-1 focus-within:ring-[var(--vscode-focusBorder)]"
         style={{

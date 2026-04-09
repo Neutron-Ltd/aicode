@@ -3,13 +3,6 @@ import type { HostToWebviewMessage } from "../../../src/shared/messages";
 import { postToHost } from "../vscodeApi";
 import { MODEL_OPTIONS, type ChatMessage } from "../types/chat";
 
-const SEED_MESSAGE: ChatMessage = {
-  id: "seed-1",
-  role: "assistant",
-  content:
-    'Here is a sample snippet — use **Insert at Cursor** on the code block:\n\n```typescript\nfunction greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n```\n\nSend a message below to try the chat.',
-};
-
 export interface MirrorState {
   isLoggedIn: boolean;
   userLabel: string | null;
@@ -53,7 +46,7 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
   tokenQuota: 142_000,
   isIndexing: false,
   selectedModelId: MODEL_OPTIONS[0].id,
-  messages: [SEED_MESSAGE],
+  messages: [],
   inputDraft: "",
   isSending: false,
 
@@ -145,7 +138,7 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
           chatError: null,
           isSending: false,
           isIndexing: false,
-          messages: [SEED_MESSAGE],
+          messages: [],
           inputDraft: "",
         });
         break;
