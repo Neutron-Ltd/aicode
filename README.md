@@ -1,6 +1,6 @@
-# Mirror
+# Mirror AI
 
-**Mirror** is an AI coding assistant for Visual Studio Code. It combines a **TypeScript extension host** with a **React + Tailwind** sidebar webview, uses **Supabase Auth** for native in-extension login, and routes AI calls through **Supabase Edge Functions** so provider keys (e.g. 302.ai) never ship in the extension.
+**Mirror AI** is an AI coding assistant for Visual Studio Code. It combines a **TypeScript extension host** with a **React + Tailwind** sidebar webview, uses **Supabase Auth** for native in-extension login, and routes AI calls through **Supabase Edge Functions** so provider keys (e.g. 302.ai) never ship in the extension.
 
 **Version:** `0.0.1`  
 **Publisher ID:** `mirror` (from `package.json`)
@@ -11,9 +11,10 @@
 
 - Native **email/password auth** in the webview (Supabase).
 - Streaming chat with typed host/webview protocol.
+- **Smart scrolling** in the chat list: auto-follows the stream only while you are near the bottom; scrolling up to read pauses follow until you scroll back down or send a new message (reduces jitter during long replies).
 - Editor integration:
   - active file + selection context
-  - **Insert at Cursor** for generated code blocks.
+  - **Apply** on each fenced code block: **replaces the current selection** if any, otherwise **inserts at the cursor** (undoable with Cmd/Ctrl+Z).
 - Prompt enrichment:
   - `.mirrorrules` support
   - rolling terminal context capture.
@@ -60,10 +61,10 @@
 
 ## Features
 
-- **Chat & model selection** in sidebar header.
+- **Chat & model selection** in the sidebar header (defaults and labels are defined in `webview/src/types/chat.ts`; upstream IDs are mapped in the `chat` Edge Function for **302.ai**).
 - **Token quota display** with live updates from edge responses.
 - **Markdown + syntax-highlighted replies**.
-- **Insert at Cursor** button in each rendered code block.
+- **Apply** button on code blocks (see *What’s implemented*).
 - **Terminal-aware prompting** (recent terminal output).
 - **Workspace indexing workflow**:
   - scans workspace recursively
@@ -141,12 +142,27 @@ It creates:
 
 ### 3) Edge Functions
 
+Set the **302.ai** API key as a Supabase secret (either name is supported by the `chat` function):
+
+```bash
+supabase secrets set THREETW_AI_API_KEY=<your_302_ai_key>
+# or
+supabase secrets set AI_UPSTREAM_KEY=<your_302_ai_key>
+```
+
+The **`embed`** function still expects **`AI_UPSTREAM_KEY`** for embeddings unless you align it separately.
+
 Deploy both functions:
 
 ```bash
-supabase secrets set AI_UPSTREAM_KEY=<your_302_ai_key>
 supabase functions deploy embed
 supabase functions deploy chat
+```
+
+Optional override for the default chat model (otherwise the app default applies):
+
+```bash
+supabase secrets set MIRROR_DEFAULT_CHAT_MODEL=<302_model_id>
 ```
 
 #### `embed` function
@@ -166,7 +182,9 @@ supabase functions deploy chat
   - checks quota in `public.user_quotas`
   - embeds user query and retrieves relevant docs via `match_documents`
   - injects `Codebase Context` into prompt
-  - streams response as SSE
+  - maps UI model ids to **302.ai** `model` strings for `https://api.302.ai/v1/chat/completions`
+  - for some provider models, sends a **minimal** JSON body (no extra fields that can trigger gateway errors); others include `temperature` and `stream_options.include_usage` where supported
+  - streams response as SSE to the extension
   - parses usage totals and deducts quota
   - emits `remaining_tokens` SSE payload for UI updates.
 
@@ -175,10 +193,10 @@ supabase functions deploy chat
 ## Usage
 
 1. Set `mirror.supabaseUrl` and `mirror.supabaseAnonKey`.
-2. Open **Mirror Chat** in activity bar.
+2. Open **Mirror AI** from the activity bar (sidebar view **Mirror AI**).
 3. Log in (or create account).
 4. Click **Index Workspace** to build/update vector index.
-5. Send chat prompts; use **Insert at Cursor** to apply code.
+5. Send chat prompts; use **Apply** on a code block to insert or replace the selection in the active editor.
 
 Prompt inputs include:
 
@@ -214,7 +232,7 @@ Project layout:
 
 - User passwords are only used for Supabase auth and not stored as plaintext in project files.
 - Session persistence uses VS Code `SecretStorage` via the Supabase storage adapter.
-- Upstream provider keys (`AI_UPSTREAM_KEY`, etc.) must remain server-side in Supabase secrets.
+- Upstream provider keys (`THREETW_AI_API_KEY` / `AI_UPSTREAM_KEY` for chat; `AI_UPSTREAM_KEY` for `embed` as implemented) must remain server-side in Supabase secrets.
 - DB reads/writes for indexing and retrieval rely on JWT + RLS isolation.
 
 ---
@@ -228,7 +246,7 @@ Project layout:
 | Indexing fails | `embed` deployed, `AI_UPSTREAM_KEY` set, user authenticated |
 | Chat without RAG context | Ensure workspace indexed and vectors exist for current user |
 | Quota errors | Check `public.user_quotas` row exists and has remaining tokens |
-| Insert at Cursor no-op | Ensure an active text editor and cursor location |
+| Apply does nothing | Ensure an active text editor; selection/cursor target is valid |
 
 ---
 
