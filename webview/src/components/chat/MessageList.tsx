@@ -1,6 +1,9 @@
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import type { ChatMessage } from "../../types/chat";
 import { MarkdownMessage } from "./MarkdownMessage";
+
+/** Pixels from bottom to consider "following" the stream (auto-scroll). */
+const NEAR_BOTTOM_THRESHOLD_PX = 100;
 
 export function MessageList({
   messages,
@@ -11,7 +14,10 @@ export function MessageList({
   onApplyCode: (code: string) => void;
   isSending: boolean;
 }): React.ReactElement {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  /** When true, new content scrolls the list to the bottom (instant, rAF). */
+  const followBottomRef = useRef(true);
+  const scrollRafRef = useRef(0);
 
   const showTypingIndicator =
     isSending &&
@@ -23,8 +29,40 @@ export function MessageList({
       return false;
     })();
 
+  const updateFollowFromScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom <= NEAR_BOTTOM_THRESHOLD_PX) {
+      followBottomRef.current = true;
+    } else {
+      followBottomRef.current = false;
+    }
+  }, []);
+
+  /** User sent a message — resume following the reply stream. */
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const last = messages[messages.length - 1];
+    if (last?.role === "user") {
+      followBottomRef.current = true;
+    }
+  }, [messages]);
+
+  /** Throttled scroll-to-bottom: only if following; instant scroll (no smooth) to avoid jitter. */
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    if (!followBottomRef.current) return;
+
+    cancelAnimationFrame(scrollRafRef.current);
+    scrollRafRef.current = requestAnimationFrame(() => {
+      const el = scrollContainerRef.current;
+      if (el && followBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+
+    return () => cancelAnimationFrame(scrollRafRef.current);
   }, [messages, showTypingIndicator]);
 
   if (messages.length === 0) {
@@ -51,7 +89,12 @@ export function MessageList({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-transparent px-3 py-4">
+    <div
+      ref={scrollContainerRef}
+      className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-transparent px-3 py-4"
+      style={{ overflowAnchor: "auto" }}
+      onScroll={updateFollowFromScroll}
+    >
       {messages.map((m) => {
         if (m.role === "assistant" && m.content === "" && isSending) {
           return null;
@@ -118,7 +161,7 @@ export function MessageList({
           </div>
         </div>
       ) : null}
-      <div ref={bottomRef} className="h-px shrink-0" aria-hidden />
+      <div className="h-px shrink-0" aria-hidden />
     </div>
   );
 }

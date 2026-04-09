@@ -209,7 +209,7 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const ok = await editorService.insertCodeAtCursor(code);
+    const ok = await editorService.applyCodeFromChat(code);
     if (!ok) {
       void vscode.window.showWarningMessage(
         "Mirror AI: No active editor — open a file to insert code."

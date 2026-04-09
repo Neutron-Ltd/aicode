@@ -87,10 +87,11 @@ export function CodeBlock({
         <button
           type="button"
           onClick={handleApply}
-          title="Insert at Cursor"
-          className="max-w-[min(100%,11rem)] truncate rounded-md border border-mirror-border bg-mirror-surface/90 px-2 py-1 text-[9px] font-medium leading-tight text-mirror-muted shadow-sm backdrop-blur-sm transition-all duration-200 ease-out hover:bg-mirror-input hover:text-mirror-fg focus:outline-none focus:ring-2 focus:ring-mirror-focus focus:ring-offset-1 focus:ring-offset-mirror-surface"
+          title="Apply this code to the active editor (replaces selection if any)"
+          aria-label="Apply code to editor"
+          className="rounded-md border border-indigo-500/35 bg-slate-800/90 px-2.5 py-1 text-[10px] font-semibold leading-tight text-indigo-200 shadow-sm backdrop-blur-sm transition-all duration-200 ease-out hover:border-indigo-400/45 hover:bg-slate-700/95 hover:text-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:ring-offset-1 focus:ring-offset-slate-950"
         >
-          Insert at Cursor
+          Apply
         </button>
       </div>
       <SyntaxHighlighter

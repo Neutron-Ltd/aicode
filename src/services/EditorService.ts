@@ -31,20 +31,30 @@ export class EditorService {
   }
 
   /**
-   * Inserts at the primary cursor. Returns false if there is no active editor.
+   * Applies code from chat: replaces the primary selection when non-empty, otherwise
+   * inserts at the cursor. Single undo step. Returns false if there is no active editor.
    */
-  async insertCodeAtCursor(code: string): Promise<boolean> {
+  async applyCodeFromChat(code: string): Promise<boolean> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       return false;
     }
 
-    const position = editor.selection.active;
+    const { selection } = editor;
 
-    const ok = await editor.edit((editBuilder) => {
-      editBuilder.insert(position, code);
+    return editor.edit((editBuilder) => {
+      if (!selection.isEmpty) {
+        editBuilder.replace(selection, code);
+      } else {
+        editBuilder.insert(selection.active, code);
+      }
     });
+  }
 
-    return ok;
+  /**
+   * @deprecated Prefer {@link applyCodeFromChat} for chat-driven inserts.
+   */
+  async insertCodeAtCursor(code: string): Promise<boolean> {
+    return this.applyCodeFromChat(code);
   }
 }
