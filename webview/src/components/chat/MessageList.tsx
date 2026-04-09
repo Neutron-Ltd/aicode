@@ -78,10 +78,44 @@ export function MessageList({
         );
       })}
       {showTypingIndicator ? (
-        <div className="flex justify-start pr-8" role="status" aria-live="polite">
-          <span className="text-[12px] italic" style={{ color: "var(--vscode-descriptionForeground)" }}>
-            …
+        <div
+          className="flex flex-col gap-2 pr-8"
+          role="status"
+          aria-live="polite"
+          aria-label="Mirror AI is thinking"
+        >
+          <span
+            className="text-[11px] font-semibold uppercase tracking-wide"
+            style={{
+              color:
+                "color-mix(in srgb, rgb(196 181 253) 75%, var(--vscode-descriptionForeground))",
+            }}
+          >
+            Mirror AI is thinking…
           </span>
+          <div className="flex max-w-[min(100%,20rem)] flex-col gap-2 rounded-lg border border-violet-500/15 bg-gray-700/50 p-3 shadow-sm animate-pulse ring-1 ring-violet-500/10">
+            <div
+              className="h-2.5 w-[88%] rounded-md"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--vscode-editor-foreground) 12%, transparent)",
+              }}
+            />
+            <div
+              className="h-2.5 w-[62%] rounded-md"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent)",
+              }}
+            />
+            <div
+              className="h-2.5 w-[40%] rounded-md"
+              style={{
+                background:
+                  "color-mix(in srgb, var(--vscode-editor-foreground) 6%, transparent)",
+              }}
+            />
+          </div>
         </div>
       ) : null}
       <div ref={bottomRef} className="h-px shrink-0" aria-hidden />

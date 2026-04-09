@@ -152,7 +152,7 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
         const api = this._api;
         if (!api) {
           const message = "Chat API not ready.";
-          void vscode.window.showErrorMessage(`Mirror: ${message}`);
+          void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
           void w.postMessage({ type: "CHAT_ERROR", payload: { message } });
           break;
         }
@@ -205,14 +205,14 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
   private async _insertCodeAtCursor(code: string): Promise<void> {
     const editorService = this._editorService;
     if (!editorService) {
-      void vscode.window.showWarningMessage("Mirror: Editor service not ready.");
+      void vscode.window.showWarningMessage("Mirror AI: Editor service not ready.");
       return;
     }
 
     const ok = await editorService.insertCodeAtCursor(code);
     if (!ok) {
       void vscode.window.showWarningMessage(
-        "Mirror: No active editor — open a file to insert code."
+        "Mirror AI: No active editor — open a file to insert code."
       );
     }
   }
@@ -231,7 +231,7 @@ function getHtmlForWebview(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <link href="${styleUri}" rel="stylesheet" />
-  <title>Mirror</title>
+  <title>Mirror AI</title>
 </head>
 <body>
   <div id="root"></div>

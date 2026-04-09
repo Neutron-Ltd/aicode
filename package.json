@@ -1,7 +1,7 @@
 {
   "name": "mirror",
-  "displayName": "Mirror",
-  "description": "AI coding assistant \u2014 Mirror (Phase 1 foundation)",
+  "displayName": "Mirror AI",
+  "description": "AI coding assistant \u2014 Mirror AI",
   "version": "0.0.1",
   "publisher": "mirror",
   "engines": {
@@ -20,7 +20,7 @@
       "activitybar": [
         {
           "id": "mirror",
-          "title": "Mirror",
+          "title": "Mirror AI",
           "icon": "media/icon.svg"
         }
       ]
@@ -29,7 +29,7 @@
       "mirror": [
         {
           "id": "mirror.chat",
-          "name": "Mirror Chat",
+          "name": "Mirror AI",
           "type": "webview"
         }
       ]

@@ -1,4 +1,8 @@
 import React, { useState } from "react";
+/**
+ * Assistant text streams from the extension host (SSE) into the Zustand store via
+ * CHAT_STREAM_DELTA — partial chunks are not applied with local useState here.
+ */
 import { ChatErrorBanner } from "../components/chat/ChatErrorBanner";
 import { Header } from "../components/chat/Header";
 import { InputArea } from "../components/chat/InputArea";

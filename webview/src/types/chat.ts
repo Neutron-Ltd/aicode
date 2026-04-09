@@ -12,7 +12,8 @@ export interface ModelOption {
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
-  { id: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
-  { id: "gpt-4o", label: "GPT-4o" },
-  { id: "gpt-4o-mini", label: "GPT-4o mini" },
+  { id: "gpt-5.4-nano", label: "GPT 5.4 Nano (Default)" },
+  { id: "grok-code-fast", label: "Grok Code Fast" },
+  { id: "qwen-3.5", label: "Qwen 3.5" },
+  { id: "doubao", label: "DuoBao" },
 ];

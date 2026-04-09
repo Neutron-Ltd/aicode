@@ -2,7 +2,7 @@
  * Mirror — Supabase Edge Function `chat`
  *
  * Secure bridge between the VS Code extension and 302.ai (OpenAI-compatible API).
- * Deploy: `supabase secrets set AI_UPSTREAM_KEY=...` then `supabase functions deploy chat`
+ * Deploy: `supabase secrets set THREETW_AI_API_KEY=...` or `AI_UPSTREAM_KEY=...` then `supabase functions deploy chat`
  *
  * **Client (extension):** POST JSON `ChatPayload` + `Authorization: Bearer <user_jwt>` + `apikey: <anon>`.
  * **Response:** `text/event-stream` with lines `data: {"delta":"..."}\n\n` and terminal `data: [DONE]\n\n`.
@@ -21,6 +21,104 @@ const EMBEDDING_MODEL = "text-embedding-3-small";
 
 /** Avoid sending huge files on every request (tune as needed). */
 const MAX_EDITOR_FILE_CHARS = 120_000;
+
+/** 302.AI `/v1/chat/completions` — strict OpenAI-compatible body uses this temperature. */
+const CHAT_TEMPERATURE = 0.7;
+
+/**
+ * Technical model IDs for https://api.302.ai/v1/chat/completions — invalid `model` returns -10003.
+ * Slug keys match `modelId` from the extension (lowercase).
+ * Label keys: normalizeModelKey(friendly label).
+ */
+const MODEL_302_BY_SLUG: Record<string, string> = {
+  "gpt-5.4-nano": "gpt-5.4-nano",
+  "grok-code-fast": "grok-code-fast-1",
+  "qwen-3.5": "qwen3.5-35b-a3b",
+  doubao: "doubao-seed-code-preview-latest",
+};
+
+const MODEL_302_BY_LABEL: Record<string, string> = {
+  "gpt 5.4 nano": "gpt-5.4-nano",
+  "gpt 5.4 nano (default)": "gpt-5.4-nano",
+  "grok code fast": "grok-code-fast-1",
+  "qwen 3.5": "qwen3.5-35b-a3b",
+  duobao: "doubao-seed-code-preview-latest",
+};
+
+function normalizeModelKey(input: string): string {
+  return input.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+const DEFAULT_UPSTREAM_MODEL =
+  MODEL_302_BY_SLUG["gpt-5.4-nano"] ?? "gpt-5.4-nano";
+
+/** Resolves extension `modelId` or a friendly display name to a 302.AI `model` string. */
+function resolve302AiModelId(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return DEFAULT_UPSTREAM_MODEL;
+
+  const slugKey = trimmed.toLowerCase();
+  if (MODEL_302_BY_SLUG[slugKey]) {
+    return MODEL_302_BY_SLUG[slugKey];
+  }
+
+  const labelKey = normalizeModelKey(trimmed);
+  if (MODEL_302_BY_LABEL[labelKey]) {
+    return MODEL_302_BY_LABEL[labelKey];
+  }
+
+  const fallback = Deno.env.get("MIRROR_DEFAULT_CHAT_MODEL")?.trim();
+  if (fallback) return fallback;
+
+  return trimmed;
+}
+
+/**
+ * Thinking / code-specialized models: omit `temperature` and `stream_options` so 302.AI
+ * does not reject the request (-10003) on providers that only accept a minimal OpenAI body.
+ */
+const MINIMAL_PAYLOAD_UPSTREAM_MODEL_IDS = new Set<string>([
+  "grok-code-fast-1",
+  "doubao-seed-code-preview-latest",
+]);
+
+function buildUpstreamChatRequestBody(
+  upstreamModel: string,
+  messages: ReturnType<typeof sanitizeChatMessages>,
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    model: upstreamModel,
+    messages,
+    stream: true,
+  };
+  if (MINIMAL_PAYLOAD_UPSTREAM_MODEL_IDS.has(upstreamModel)) {
+    return base;
+  }
+  base.temperature = CHAT_TEMPERATURE;
+  base.stream_options = { include_usage: true };
+  return base;
+}
+
+/** Ensures non-empty, valid roles and string content for the upstream API. */
+function sanitizeChatMessages(
+  messages: OpenAIChatMessage[],
+): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  const allowed = new Set<string>(["system", "user", "assistant"]);
+  const out: Array<{ role: "system" | "user" | "assistant"; content: string }> =
+    [];
+  for (const m of messages) {
+    if (!m || typeof m !== "object") continue;
+    const role = m.role;
+    if (!allowed.has(role)) continue;
+    let content = typeof m.content === "string" ? m.content : "";
+    if (content.length === 0) content = " ";
+    out.push({ role: role as "system" | "user" | "assistant", content });
+  }
+  if (out.length === 0) {
+    return [{ role: "user", content: " " }];
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // CORS — extension host `fetch` to Supabase is cross-origin; OPTIONS preflight.
@@ -83,7 +181,7 @@ function buildOpenAIMessages(
     : "(No workspace rules file was provided.)";
 
   const systemContent = [
-    "You are Mirror, an AI coding assistant inside VS Code.",
+    "You are Mirror AI, an AI coding assistant inside VS Code.",
     "Follow the workspace rules when relevant. Use markdown in replies.",
     "",
     rulesBlock,
@@ -140,8 +238,49 @@ async function embedText(apiKey: string, input: string): Promise<number[]> {
   return vec;
 }
 
+/** Pull `usage.total_tokens` from an OpenAI-style stream chunk (often last chunk). */
+function getUsageTotalTokens(chunk: {
+  choices?: unknown;
+  usage?: { total_tokens?: number };
+}): number | null {
+  const t = chunk.usage?.total_tokens;
+  return typeof t === "number" ? t : null;
+}
+
+/**
+ * Assistant text from OpenAI-style stream chunks.
+ * Uses optional chaining (`choices?.[0]?.delta?.content`); usage-only chunks skip text safely.
+ * Adds small fallbacks for alternate provider shapes.
+ */
+function extractAssistantDeltaText(chunk: unknown): string | null {
+  if (chunk == null || typeof chunk !== "object") return null;
+  const c = chunk as {
+    choices?: Array<{
+      delta?: { content?: unknown } | null;
+      message?: { content?: unknown } | null;
+      text?: unknown;
+    }>;
+  };
+  const piece =
+    c?.choices?.[0]?.delta?.content ??
+    c?.choices?.[0]?.message?.content ??
+    c?.choices?.[0]?.text;
+  if (typeof piece === "string" && piece.length > 0) {
+    return piece;
+  }
+  return null;
+}
+
+/** Resolve 302.AI key: prefer explicit name, then legacy secret. */
+function resolveUpstreamApiKey(): string | null {
+  const a = Deno.env.get("THREETW_AI_API_KEY")?.trim();
+  const b = Deno.env.get("AI_UPSTREAM_KEY")?.trim();
+  return a || b || null;
+}
+
 /**
  * OpenAI/302 stream uses `data: {json}\n\n` with `choices[0].delta.content`.
+ * With `stream_options.include_usage`, a final chunk may include `usage` (often with empty `choices`).
  * Mirror extension expects `data: {"delta":"..."}\n\n` and `data: [DONE]\n\n`.
  */
 async function* transformUpstreamStreamToMirrorSSE(
@@ -159,6 +298,10 @@ async function* transformUpstreamStreamToMirrorSSE(
         buffer += decoder.decode();
         break;
       }
+      if (value?.length) {
+        const rawPreview = new TextDecoder().decode(value).slice(0, 50);
+        console.log("[302 upstream raw chunk]", rawPreview);
+      }
       buffer += decoder.decode(value, { stream: true });
 
       const lines = buffer.split("\n");
@@ -168,72 +311,68 @@ async function* transformUpstreamStreamToMirrorSSE(
         const trimmed = line.trimEnd();
         if (!trimmed || trimmed.startsWith(":")) continue;
 
-        if (!trimmed.startsWith("data:")) continue;
+        if (!trimmed.toLowerCase().startsWith("data:")) continue;
 
         const data = trimmed.slice(5).trimStart();
         if (data === "[DONE]") {
           yield encoder.encode(`data: [DONE]\n\n`);
           continue;
         }
+        if (data.length === 0) continue;
 
+        let chunk: unknown;
         try {
-          const chunk = JSON.parse(data) as {
-            choices?: Array<{
-              delta?: { content?: string | null };
-            }>;
-            usage?: { total_tokens?: number };
-          };
-          const hasEmptyChoices =
-            Array.isArray(chunk.choices) && chunk.choices.length === 0;
-          const totalTokens = chunk.usage?.total_tokens;
-          // Final usage chunk from upstream: no choices + usage totals.
-          if (hasEmptyChoices && typeof totalTokens === "number") {
-            yield encoder.encode(
-              `data: ${JSON.stringify({ usage_total_tokens: totalTokens })}\n\n`,
-            );
-            continue;
-          }
-          const piece = chunk.choices?.[0]?.delta?.content;
-          if (typeof piece === "string" && piece.length > 0) {
-            yield encoder.encode(
-              `data: ${JSON.stringify({ delta: piece })}\n\n`,
-            );
-          }
+          chunk = JSON.parse(data);
         } catch {
-          // skip malformed JSON lines
+          continue;
+        }
+
+        const usageTokens = getUsageTotalTokens(
+          chunk as { choices?: unknown; usage?: { total_tokens?: number } },
+        );
+        if (usageTokens !== null) {
+          yield encoder.encode(
+            `data: ${JSON.stringify({ usage_total_tokens: usageTokens })}\n\n`,
+          );
+        }
+
+        const piece = extractAssistantDeltaText(chunk);
+        if (piece !== null) {
+          yield encoder.encode(
+            `data: ${JSON.stringify({ delta: piece })}\n\n`,
+          );
         }
       }
     }
 
     if (buffer.trim()) {
       const trimmed = buffer.trimEnd();
-      if (trimmed.startsWith("data:")) {
+      if (trimmed.toLowerCase().startsWith("data:")) {
         const data = trimmed.slice(5).trimStart();
         if (data === "[DONE]") {
           yield encoder.encode(`data: [DONE]\n\n`);
-        } else {
+        } else if (data.length > 0) {
+          let chunk: unknown;
           try {
-            const chunk = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: string | null } }>;
-              usage?: { total_tokens?: number };
-            };
-            const hasEmptyChoices =
-              Array.isArray(chunk.choices) && chunk.choices.length === 0;
-            const totalTokens = chunk.usage?.total_tokens;
-            if (hasEmptyChoices && typeof totalTokens === "number") {
+            chunk = JSON.parse(data);
+          } catch {
+            chunk = undefined;
+          }
+          if (chunk !== undefined) {
+            const usageTokens = getUsageTotalTokens(
+              chunk as { choices?: unknown; usage?: { total_tokens?: number } },
+            );
+            if (usageTokens !== null) {
               yield encoder.encode(
-                `data: ${JSON.stringify({ usage_total_tokens: totalTokens })}\n\n`,
+                `data: ${JSON.stringify({ usage_total_tokens: usageTokens })}\n\n`,
               );
-              continue;
             }
-            const piece = chunk.choices?.[0]?.delta?.content;
-            if (typeof piece === "string" && piece.length > 0) {
+            const piece = extractAssistantDeltaText(chunk);
+            if (piece !== null) {
               yield encoder.encode(
                 `data: ${JSON.stringify({ delta: piece })}\n\n`,
               );
             }
-          } catch {
-            /* ignore */
           }
         }
       }
@@ -297,10 +436,11 @@ async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: "Missing query" }, 400);
   }
 
-  const model =
+  const uiModelId =
     typeof payload.modelId === "string" && payload.modelId.trim()
       ? payload.modelId.trim()
-      : "gpt-4o-mini";
+      : "gpt-5.4-nano";
+  const upstreamModel = resolve302AiModelId(uiModelId);
 
   if (!payload.editorContext || typeof payload.editorContext !== "object") {
     return jsonResponse({ error: "Missing editorContext" }, 400);
@@ -308,8 +448,8 @@ async function handler(req: Request): Promise<Response> {
 
   const { data: quotaRow, error: quotaError } = await dbClient
     .from("user_quotas")
-    .select("remaining_tokens")
-    .eq("user_id", user.id)
+    .select("tokens_used, total_quota")
+    .eq("id", user.id)
     .maybeSingle();
   if (quotaError) {
     return jsonResponse(
@@ -320,16 +460,21 @@ async function handler(req: Request): Promise<Response> {
   if (!quotaRow) {
     return jsonResponse({ error: "Quota row not found for user." }, 403);
   }
-  if (typeof quotaRow.remaining_tokens !== "number" || quotaRow.remaining_tokens <= 0) {
+  const tokensUsed =
+    typeof quotaRow.tokens_used === "number" ? quotaRow.tokens_used : 0;
+  const totalQuota =
+    typeof quotaRow.total_quota === "number" ? quotaRow.total_quota : 0;
+  const remainingBefore = Math.max(0, totalQuota - tokensUsed);
+  if (remainingBefore <= 0) {
     return jsonResponse({ error: "Insufficient token quota." }, 402);
   }
 
-  const apiKey = Deno.env.get("AI_UPSTREAM_KEY");
+  const apiKey = resolveUpstreamApiKey();
   if (!apiKey) {
     return jsonResponse(
       {
         error:
-          "AI_UPSTREAM_KEY is not set. Use: supabase secrets set AI_UPSTREAM_KEY=...",
+          "THREETW_AI_API_KEY or AI_UPSTREAM_KEY is not set. Use: supabase secrets set THREETW_AI_API_KEY=...",
       },
       503,
     );
@@ -373,32 +518,48 @@ async function handler(req: Request): Promise<Response> {
     codebaseContext = "";
   }
 
-  const messages = buildOpenAIMessages(payload, codebaseContext);
+  const builtMessages = buildOpenAIMessages(payload, codebaseContext);
+  const messages = sanitizeChatMessages(builtMessages);
+
+  const requestBody = buildUpstreamChatRequestBody(upstreamModel, messages);
+
+  console.log("Sending to 302.AI:", JSON.stringify(requestBody, null, 2));
 
   const upstreamResponse = await fetch(UPSTREAM_CHAT_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
-      Accept: "text/event-stream",
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      stream_options: {
-        include_usage: true,
-      },
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!upstreamResponse.ok) {
     const errText = await upstreamResponse.text();
+    let providerMessage = errText;
+    try {
+      const j = JSON.parse(errText) as {
+        error?: { message?: string } | string;
+        message?: string;
+        msg?: string;
+      };
+      if (typeof j.error === "string") {
+        providerMessage = j.error;
+      } else if (j.error && typeof j.error === "object" && j.error.message) {
+        providerMessage = j.error.message;
+      } else if (typeof j.message === "string") {
+        providerMessage = j.message;
+      } else if (typeof j.msg === "string") {
+        providerMessage = j.msg;
+      }
+    } catch {
+      /* use raw errText */
+    }
     return jsonResponse(
       {
-        error: "Upstream error",
-        status: upstreamResponse.status,
-        detail: errText.slice(0, 2000),
+        error: providerMessage.slice(0, 4000),
+        upstream_status: upstreamResponse.status,
+        upstream_raw: errText.slice(0, 8000),
       },
       502,
     );
@@ -409,54 +570,69 @@ async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: "Empty upstream body" }, 502);
   }
 
+  const inputCharCount = messages.reduce(
+    (acc, m) => acc + m.content.length,
+    0,
+  );
+
   const outputStream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
-      let usedTokensExact: number | null = null;
+      let usedTokensFromStream: number | null = null;
+      let outputCharCount = 0;
       try {
         for await (const chunk of transformUpstreamStreamToMirrorSSE(
           upstreamBody,
         )) {
           const text = new TextDecoder().decode(chunk);
-          const match = /^data:\s*(.+)$/m.exec(text);
-          if (match && match[1] && match[1] !== "[DONE]") {
+          for (const line of text.split("\n")) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trimStart();
+            if (payload === "[DONE]") continue;
             try {
-              const parsed = JSON.parse(match[1]) as {
+              const parsed = JSON.parse(payload) as {
                 usage_total_tokens?: number;
+                delta?: string;
               };
               if (typeof parsed.usage_total_tokens === "number") {
-                usedTokensExact = parsed.usage_total_tokens;
+                usedTokensFromStream = parsed.usage_total_tokens;
+              }
+              if (typeof parsed.delta === "string") {
+                outputCharCount += parsed.delta.length;
               }
             } catch {
-              // ignore parse failures on usage accounting
+              // ignore partial / non-JSON lines
             }
           }
           controller.enqueue(chunk);
         }
 
-        if (usedTokensExact === null) {
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
-                error:
-                  "Upstream stream ended without usage.total_tokens; quota was not deducted.",
-              })}\n\n`,
-            ),
+        let deductTokens = usedTokensFromStream;
+        if (deductTokens === null || deductTokens === undefined) {
+          const estimated = Math.max(
+            1,
+            Math.ceil((inputCharCount + outputCharCount) / 4),
           );
-          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-          return;
+          console.warn(
+            "Usage data missing, using estimated quota deduction.",
+            { inputCharCount, outputCharCount, estimated },
+          );
+          deductTokens = estimated;
         }
 
+        const newTokensUsed = Math.min(
+          totalQuota,
+          tokensUsed + deductTokens,
+        );
         const { data: updatedQuota, error: deductError } = await dbClient
           .from("user_quotas")
           .update({
-            remaining_tokens: Math.max(
-              0,
-              quotaRow.remaining_tokens - usedTokensExact,
-            ),
+            tokens_used: newTokensUsed,
+            updated_at: new Date().toISOString(),
           })
-          .eq("user_id", user.id)
-          .select("remaining_tokens")
+          .eq("id", user.id)
+          .select("tokens_used, total_quota")
           .single();
         if (deductError) {
           controller.enqueue(
@@ -467,10 +643,19 @@ async function handler(req: Request): Promise<Response> {
             )
           );
         } else {
+          const tu =
+            typeof updatedQuota.tokens_used === "number"
+              ? updatedQuota.tokens_used
+              : 0;
+          const tq =
+            typeof updatedQuota.total_quota === "number"
+              ? updatedQuota.total_quota
+              : 0;
+          const remaining_tokens = Math.max(0, tq - tu);
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({
-                remaining_tokens: updatedQuota.remaining_tokens,
+                remaining_tokens,
               })}\n\n`
             )
           );

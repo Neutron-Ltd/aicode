@@ -120,7 +120,27 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
         }));
         break;
       case "CHAT_STREAM_END":
-        set({ isSending: false });
+        set((s) => {
+          const last = s.messages[s.messages.length - 1];
+          const emptyAssistant =
+            last?.role === "assistant" &&
+            (last.content ?? "").trim().length === 0;
+          if (!emptyAssistant) {
+            return { isSending: false };
+          }
+          return {
+            isSending: false,
+            messages: s.messages.map((m, idx) =>
+              idx === s.messages.length - 1 && m.role === "assistant"
+                ? {
+                    ...m,
+                    content:
+                      "Mirror AI returned an empty response. Please try again or choose another model.",
+                  }
+                : m
+            ),
+          };
+        });
         break;
       case "CHAT_ERROR":
         set({

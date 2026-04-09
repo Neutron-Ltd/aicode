@@ -64,7 +64,7 @@ export function LoginScreen(): React.ReactElement {
               </svg>
             </div>
             <h1 className="text-xl font-semibold tracking-tight text-mirror-fg sm:text-2xl">
-              Welcome to Mirror
+              Welcome to Mirror AI
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-mirror-muted">
               Sign in to your account to continue. New here? Create an account

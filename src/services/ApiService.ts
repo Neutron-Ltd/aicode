@@ -29,16 +29,16 @@ export class ApiService {
     const anonKey = SUPABASE_ANON_KEY.trim();
     if (!url || !anonKey) {
       const message =
-        "Mirror is not configured. Backend URL and key are missing in the extension build.";
+        "Mirror AI is not configured. Backend URL and key are missing in the extension build.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror: ${message}`);
+      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
       return;
     }
 
     if (!this.auth.getSupabaseClient()) {
-      const message = "Mirror client not configured.";
+      const message = "Mirror AI client not configured.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror: ${message}`);
+      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
       return;
     }
 
@@ -46,7 +46,7 @@ export class ApiService {
     if (!token) {
       const message = "Sign in to use chat.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror: ${message}`);
+      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
       return;
     }
 
@@ -83,7 +83,7 @@ export class ApiService {
         const errText = await response.text().catch(() => response.statusText);
         const message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
         this.postChatError(message);
-        void vscode.window.showErrorMessage(`Mirror: ${message}`);
+        void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
         return;
       }
 
@@ -104,7 +104,7 @@ export class ApiService {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror: ${message}`);
+      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
     }
   }
 
@@ -162,9 +162,14 @@ export class ApiService {
         delta?: string;
         error?: string;
         remaining_tokens?: number;
+        usage_total_tokens?: number;
       };
       if (typeof parsed.error === "string" && parsed.error.length > 0) {
         throw new Error(parsed.error);
+      }
+      // Server-side accounting only — never forward as chat text.
+      if (typeof parsed.usage_total_tokens === "number") {
+        return;
       }
       if (typeof parsed.remaining_tokens === "number") {
         this.postToWebview({
@@ -172,7 +177,7 @@ export class ApiService {
           payload: { remaining: parsed.remaining_tokens },
         });
       }
-      if (typeof parsed.delta === "string") {
+      if (typeof parsed.delta === "string" && parsed.delta.length > 0) {
         this.postToWebview({
           type: "CHAT_STREAM_DELTA",
           payload: { id: assistantId, delta: parsed.delta },
@@ -180,6 +185,10 @@ export class ApiService {
       }
     } catch (e) {
       if (e instanceof SyntaxError) {
+        const t = data.trim();
+        if (t.startsWith("{") || t.startsWith("[")) {
+          return;
+        }
         this.postToWebview({
           type: "CHAT_STREAM_DELTA",
           payload: { id: assistantId, delta: data },
