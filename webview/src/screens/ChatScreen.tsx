@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 /**
  * Assistant text streams from the extension host (SSE) into the Zustand store via
- * CHAT_STREAM_DELTA — partial chunks are not applied with local useState here.
+ * CHAT_STREAM_DELTA (Ultra AI) — partial chunks are not applied with local useState here.
  */
 import { ChatErrorBanner } from "../components/chat/ChatErrorBanner";
 import { Header } from "../components/chat/Header";
@@ -9,34 +9,34 @@ import { InputArea } from "../components/chat/InputArea";
 import { MessageList } from "../components/chat/MessageList";
 import { SettingsPanel } from "../components/chat/SettingsPanel";
 import { MODEL_OPTIONS } from "../types/chat";
-import { useMirrorStore } from "../store/mirrorStore";
+import { useUltraStore } from "../store/ultraStore";
 
 export function ChatScreen(): React.ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const selectedModelId = useMirrorStore((s) => s.selectedModelId);
-  const setSelectedModelId = useMirrorStore((s) => s.setSelectedModelId);
-  const tokenQuota = useMirrorStore((s) => s.tokenQuota);
-  const messages = useMirrorStore((s) => s.messages);
-  const inputDraft = useMirrorStore((s) => s.inputDraft);
-  const setInputDraft = useMirrorStore((s) => s.setInputDraft);
-  const sendUserMessage = useMirrorStore((s) => s.sendUserMessage);
-  const isSending = useMirrorStore((s) => s.isSending);
-  const requestInsertCode = useMirrorStore((s) => s.requestInsertCode);
-  const indexWorkspace = useMirrorStore((s) => s.indexWorkspace);
-  const isIndexing = useMirrorStore((s) => s.isIndexing);
-  const userLabel = useMirrorStore((s) => s.userLabel);
-  const userEmail = useMirrorStore((s) => s.userEmail);
-  const chatError = useMirrorStore((s) => s.chatError);
-  const clearChat = useMirrorStore((s) => s.clearChat);
-  const requestLogout = useMirrorStore((s) => s.requestLogout);
-  const dismissChatError = useMirrorStore((s) => s.dismissChatError);
+  const selectedModelId = useUltraStore((s) => s.selectedModelId);
+  const setSelectedModelId = useUltraStore((s) => s.setSelectedModelId);
+  const tokenQuota = useUltraStore((s) => s.tokenQuota);
+  const messages = useUltraStore((s) => s.messages);
+  const inputDraft = useUltraStore((s) => s.inputDraft);
+  const setInputDraft = useUltraStore((s) => s.setInputDraft);
+  const sendUserMessage = useUltraStore((s) => s.sendUserMessage);
+  const isSending = useUltraStore((s) => s.isSending);
+  const requestInsertCode = useUltraStore((s) => s.requestInsertCode);
+  const indexWorkspace = useUltraStore((s) => s.indexWorkspace);
+  const isIndexing = useUltraStore((s) => s.isIndexing);
+  const userLabel = useUltraStore((s) => s.userLabel);
+  const userEmail = useUltraStore((s) => s.userEmail);
+  const chatError = useUltraStore((s) => s.chatError);
+  const clearChat = useUltraStore((s) => s.clearChat);
+  const requestLogout = useUltraStore((s) => s.requestLogout);
+  const dismissChatError = useUltraStore((s) => s.dismissChatError);
 
   const clearChatDisabled =
     messages.length === 0 || isSending;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-mirror-surface">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-ultra-surface">
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.45]"
         style={{

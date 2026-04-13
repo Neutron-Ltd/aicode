@@ -1,17 +1,17 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import * as vscode from "vscode";
 import {
-  MIRROR_OAUTH_PROVIDER,
+  ULTRA_OAUTH_PROVIDER,
   SUPABASE_ANON_KEY,
   SUPABASE_URL,
 } from "../config";
 import type { HostToWebviewMessage } from "../shared/messages";
 
-/** Must match package.json publisher + name → vscode://mirror.mirror/... */
-export const MIRROR_URI_AUTHORITY = "mirror.mirror";
-export const MIRROR_AUTH_PATH = "/auth";
+/** Must match package.json `publisher` + `name` → vscode://mirror.build-ultra/... */
+export const BUILD_ULTRA_URI_AUTHORITY = "mirror.build-ultra";
+export const BUILD_ULTRA_AUTH_PATH = "/auth";
 
-const STORAGE_BLOB_KEY = "mirror.supabase.auth.storage.v1";
+const STORAGE_BLOB_KEY = "build-ultra.supabase.auth.storage.v1";
 
 /**
  * Single JSON blob in SecretStorage — implements Supabase auth storage keys.
@@ -58,14 +58,14 @@ class BlobSecretStorage {
 }
 
 /** Shared Supabase URL/key from bundled config (also used by ApiService). */
-export function getMirrorSupabaseConfig(): {
+export function getUltraSupabaseConfig(): {
   url: string;
   key: string;
   provider: string;
 } {
   const url = SUPABASE_URL.trim();
   const key = SUPABASE_ANON_KEY.trim();
-  const provider = MIRROR_OAUTH_PROVIDER.trim() || "github";
+  const provider = ULTRA_OAUTH_PROVIDER.trim() || "github";
   return { url, key, provider };
 }
 
@@ -98,7 +98,7 @@ export class AuthService {
 
   /** OAuth redirect URI — add this exact URL to Supabase Auth → Redirect URLs. */
   getRedirectUriString(): string {
-    return `vscode://${MIRROR_URI_AUTHORITY}${MIRROR_AUTH_PATH}`;
+    return `vscode://${BUILD_ULTRA_URI_AUTHORITY}${BUILD_ULTRA_AUTH_PATH}`;
   }
 
   /** Same client used for OAuth — session lives in SecretStorage. */
@@ -122,8 +122,8 @@ export class AuthService {
   async loginUser(email: string, password: string): Promise<void> {
     const client = this.getOrCreateClient();
     if (!client) {
-      const msg = "Mirror is not configured. Backend URL and key are missing in the extension build.";
-      void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+      const msg = "Build Ultra is not configured. Backend URL and key are missing in the extension build.";
+      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
       this.postAuthError(msg);
       return;
     }
@@ -134,7 +134,7 @@ export class AuthService {
     });
 
     if (error) {
-      void vscode.window.showErrorMessage(`Mirror: ${error.message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${error.message}`);
       this.postAuthError(error.message);
       return;
     }
@@ -142,7 +142,7 @@ export class AuthService {
     const user = data.user ?? data.session?.user;
     if (!user) {
       const msg = "No user returned after sign-in.";
-      void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
       this.postAuthError(msg);
       return;
     }
@@ -158,8 +158,8 @@ export class AuthService {
   async registerUser(email: string, password: string): Promise<void> {
     const client = this.getOrCreateClient();
     if (!client) {
-      const msg = "Mirror is not configured. Backend URL and key are missing in the extension build.";
-      void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+      const msg = "Build Ultra is not configured. Backend URL and key are missing in the extension build.";
+      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
       this.postAuthError(msg);
       return;
     }
@@ -167,7 +167,7 @@ export class AuthService {
     const { data, error } = await client.auth.signUp({ email, password });
 
     if (error) {
-      void vscode.window.showErrorMessage(`Mirror: ${error.message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${error.message}`);
       this.postAuthError(error.message);
       return;
     }
@@ -180,13 +180,13 @@ export class AuthService {
     if (data.user) {
       const msg =
         "Account created. Check your email to confirm, then sign in.";
-      void vscode.window.showInformationMessage(`Mirror: ${msg}`);
+      void vscode.window.showInformationMessage(`Build Ultra: ${msg}`);
       this.postAuthError(msg);
       return;
     }
 
     const msg = "Sign up did not return a user. Try again.";
-    void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+    void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
     this.postAuthError(msg);
   }
 
@@ -195,7 +195,7 @@ export class AuthService {
   }
 
   private getOrCreateClient(): SupabaseClient | null {
-    const { url, key } = getMirrorSupabaseConfig();
+    const { url, key } = getUltraSupabaseConfig();
     if (!url || !key) {
       return null;
     }
@@ -218,10 +218,10 @@ export class AuthService {
 
   async startOAuthLogin(): Promise<void> {
     const client = this.getOrCreateClient();
-    const { provider } = getMirrorSupabaseConfig();
+    const { provider } = getUltraSupabaseConfig();
     if (!client) {
-      const msg = "Mirror is not configured. Backend URL and key are missing in the extension build.";
-      void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+      const msg = "Build Ultra is not configured. Backend URL and key are missing in the extension build.";
+      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
       this.postToWebview({
         type: "AUTH_ERROR",
         payload: { message: msg },
@@ -239,7 +239,7 @@ export class AuthService {
     });
 
     if (error) {
-      void vscode.window.showErrorMessage(`Mirror sign-in: ${error.message}`);
+      void vscode.window.showErrorMessage(`Build Ultra sign-in: ${error.message}`);
       this.postToWebview({
         type: "AUTH_ERROR",
         payload: { message: error.message },
@@ -249,7 +249,7 @@ export class AuthService {
 
     if (!data.url) {
       const msg = "No OAuth URL returned.";
-      void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
       this.postToWebview({ type: "AUTH_ERROR", payload: { message: msg } });
       return;
     }
@@ -259,13 +259,13 @@ export class AuthService {
 
   async handleUri(uri: vscode.Uri): Promise<void> {
     if (uri.scheme !== "vscode") return;
-    if (uri.authority !== MIRROR_URI_AUTHORITY) return;
+    if (uri.authority !== BUILD_ULTRA_URI_AUTHORITY) return;
     if (!uri.path.includes("auth")) return;
 
     const client = this.getOrCreateClient();
     if (!client) {
       void vscode.window.showErrorMessage(
-        "Mirror: not configured. Backend URL and key are missing in the extension build."
+        "Build Ultra: not configured. Backend URL and key are missing in the extension build."
       );
       return;
     }
@@ -273,7 +273,7 @@ export class AuthService {
     const params = new URLSearchParams(uri.query);
     const oauthError = params.get("error_description") || params.get("error");
     if (oauthError) {
-      void vscode.window.showErrorMessage(`Mirror auth: ${oauthError}`);
+      void vscode.window.showErrorMessage(`Build Ultra auth: ${oauthError}`);
       this.postToWebview({
         type: "AUTH_ERROR",
         payload: { message: oauthError },
@@ -284,7 +284,7 @@ export class AuthService {
     const code = params.get("code");
     if (!code) {
       void vscode.window.showErrorMessage(
-        "Mirror: OAuth callback missing code. Check redirect URLs for this app."
+        "Build Ultra: OAuth callback missing code. Check redirect URLs for this app."
       );
       this.postToWebview({
         type: "AUTH_ERROR",
@@ -295,7 +295,7 @@ export class AuthService {
 
     const { data, error } = await client.auth.exchangeCodeForSession(code);
     if (error) {
-      void vscode.window.showErrorMessage(`Mirror: ${error.message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${error.message}`);
       this.postToWebview({
         type: "AUTH_ERROR",
         payload: { message: error.message },
@@ -306,7 +306,7 @@ export class AuthService {
     const user = data.session?.user;
     if (!user) {
       const msg = "No user session after OAuth.";
-      void vscode.window.showErrorMessage(`Mirror: ${msg}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
       this.postToWebview({ type: "AUTH_ERROR", payload: { message: msg } });
       return;
     }
@@ -334,7 +334,7 @@ export class AuthService {
     if (client) {
       const { error } = await client.auth.signOut();
       if (error) {
-        void vscode.window.showErrorMessage(`Mirror: ${error.message}`);
+        void vscode.window.showErrorMessage(`Build Ultra: ${error.message}`);
         this.postToWebview({
           type: "AUTH_ERROR",
           payload: { message: error.message },

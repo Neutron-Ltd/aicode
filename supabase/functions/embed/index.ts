@@ -1,5 +1,5 @@
 /**
- * Mirror — Supabase Edge Function `embed`
+ * Build Ultra — Supabase Edge Function `embed`
  *
  * Receives workspace chunks from the extension host, generates embeddings via
  * 302.ai (OpenAI-compatible API), and stores vectors in `workspace_documents`

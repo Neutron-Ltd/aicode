@@ -125,7 +125,7 @@ export function MessageList({
           className="flex flex-col gap-2 pr-8"
           role="status"
           aria-live="polite"
-          aria-label="Mirror AI is thinking"
+          aria-label="Ultra AI is thinking"
         >
           <span
             className="text-[11px] font-semibold uppercase tracking-wide"
@@ -134,7 +134,7 @@ export function MessageList({
                 "color-mix(in srgb, rgb(196 181 253) 75%, var(--vscode-descriptionForeground))",
             }}
           >
-            Mirror AI is thinking…
+            Ultra AI is thinking…
           </span>
           <div className="flex max-w-[min(100%,20rem)] flex-col gap-2 rounded-lg border border-violet-500/15 bg-gray-700/50 p-3 shadow-sm animate-pulse ring-1 ring-violet-500/10">
             <div

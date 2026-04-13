@@ -1,5 +1,5 @@
 import { parseHostMessage } from "../../../src/shared/messages";
-import { useMirrorStore } from "../store/mirrorStore";
+import { useUltraStore } from "../store/ultraStore";
 
 let bridgeInitialized = false;
 
@@ -13,7 +13,7 @@ export function initHostMessageBridge(): void {
   window.addEventListener("message", (event: MessageEvent) => {
     const msg = parseHostMessage(event.data);
     if (msg) {
-      useMirrorStore.getState().applyHostMessage(msg);
+      useUltraStore.getState().applyHostMessage(msg);
     }
   });
 }

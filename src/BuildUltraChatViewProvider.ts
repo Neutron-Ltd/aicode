@@ -11,10 +11,10 @@ import {
 } from "./shared/messages";
 
 /**
- * Sidebar webview for Mirror chat UI (React + Tailwind build in /media).
+ * Sidebar webview for Build Ultra / Ultra AI chat UI (React + Tailwind build in /media).
  */
-export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = "mirror.chat";
+export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = "buildUltra.chat";
 
   private _webview: vscode.Webview | undefined;
   private _auth: AuthService | undefined;
@@ -152,7 +152,7 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
         const api = this._api;
         if (!api) {
           const message = "Chat API not ready.";
-          void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
+          void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
           void w.postMessage({ type: "CHAT_ERROR", payload: { message } });
           break;
         }
@@ -205,14 +205,14 @@ export class MirrorChatViewProvider implements vscode.WebviewViewProvider {
   private async _insertCodeAtCursor(code: string): Promise<void> {
     const editorService = this._editorService;
     if (!editorService) {
-      void vscode.window.showWarningMessage("Mirror AI: Editor service not ready.");
+      void vscode.window.showWarningMessage("Build Ultra: Editor service not ready.");
       return;
     }
 
     const ok = await editorService.applyCodeFromChat(code);
     if (!ok) {
       void vscode.window.showWarningMessage(
-        "Mirror AI: No active editor — open a file to insert code."
+        "Build Ultra: No active editor — open a file to insert code."
       );
     }
   }
@@ -231,7 +231,7 @@ function getHtmlForWebview(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <link href="${styleUri}" rel="stylesheet" />
-  <title>Mirror AI</title>
+  <title>Ultra AI</title>
 </head>
 <body>
   <div id="root"></div>

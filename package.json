@@ -1,7 +1,7 @@
 {
-  "name": "mirror",
-  "displayName": "Mirror AI",
-  "description": "AI coding assistant \u2014 Mirror AI",
+  "name": "build-ultra",
+  "displayName": "Build Ultra",
+  "description": "AI coding assistant — Ultra AI by Build Ultra",
   "version": "0.0.1",
   "publisher": "mirror",
   "engines": {
@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:mirror.chat",
+    "onView:buildUltra.chat",
     "onUri"
   ],
   "main": "./out/extension.js",
@@ -19,17 +19,17 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "mirror",
-          "title": "Mirror AI",
+          "id": "buildUltra",
+          "title": "Build Ultra",
           "icon": "media/icon.svg"
         }
       ]
     },
     "views": {
-      "mirror": [
+      "buildUltra": [
         {
-          "id": "mirror.chat",
-          "name": "Mirror AI",
+          "id": "buildUltra.chat",
+          "name": "Ultra AI",
           "type": "webview"
         }
       ]

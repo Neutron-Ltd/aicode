@@ -1,9 +1,9 @@
-# Mirror AI
+# Build Ultra
 
-**Mirror AI** is an AI coding assistant for Visual Studio Code. It combines a **TypeScript extension host** with a **React + Tailwind** sidebar webview, uses **Supabase Auth** for native in-extension login, and routes AI calls through **Supabase Edge Functions** so provider keys (e.g. 302.ai) never ship in the extension.
+**Build Ultra** is an AI coding assistant for Visual Studio Code. The in-chat assistant is **Ultra AI**. The extension combines a **TypeScript extension host** with a **React + Tailwind** sidebar webview, uses **Supabase Auth** for native in-extension login, and routes AI calls through **Supabase Edge Functions** so provider keys (e.g. 302.ai) never ship in the extension.
 
 **Version:** `0.0.1`  
-**Publisher ID:** `mirror` (from `package.json`)
+**Publisher ID:** `mirror` (from `package.json`; extension id `mirror.build-ultra`)
 
 ---
 
@@ -16,7 +16,7 @@
   - active file + selection context
   - **Apply** on each fenced code block: **replaces the current selection** if any, otherwise **inserts at the cursor** (undoable with Cmd/Ctrl+Z).
 - Prompt enrichment:
-  - `.mirrorrules` support
+  - **`.ultrarules`** at the workspace root (legacy: **`.mirrorrules`** is still read if `.ultrarules` is missing)
   - rolling terminal context capture.
 - Quota flow:
   - enforced in edge (`public.user_quotas`)
@@ -39,7 +39,7 @@
 ┌──────────────────────────────┐      postMessage       ┌─────────────────────────────┐
 │ Extension Host (TypeScript)  │ ◄────────────────────► │ React Webview (Sidebar)     │
 │ - AuthService                │   typed protocol       │ - LoginScreen / ChatScreen  │
-│ - ApiService                 │   (src/shared/messages)│ - Zustand store             │
+│ - ApiService                 │   (src/shared/messages)│ - Zustand store (ultraStore)│
 │ - PromptBuilderService       │                        │ - Header + MessageList       │
 │ - EditorService              │                        │ - Index Workspace button     │
 │ - TerminalService            │                        └─────────────────────────────┘
@@ -110,7 +110,7 @@ Install via **Extensions → … → Install from VSIX…**.
 
 ## Configuration
 
-Configure in VS Code settings:
+Configure in VS Code settings (keys may still use the `mirror` prefix from earlier builds — check `package.json` `contributes.configuration` if added):
 
 | Setting | Description |
 |---|---|
@@ -126,7 +126,7 @@ Configure in VS Code settings:
 
 - Enable **Email** provider in Supabase Auth.
 - Extension uses native email/password forms.
-- (Legacy optional) OAuth redirect: `vscode://mirror.mirror/auth`.
+- (Legacy optional) OAuth redirect: **`vscode://mirror.build-ultra/auth`** — add this exact URL to Supabase **Auth → Redirect URLs** (replaces the old `vscode://mirror.mirror/auth` if you used it).
 
 ### 2) Database migration (pgvector + RLS)
 
@@ -159,10 +159,12 @@ supabase functions deploy embed
 supabase functions deploy chat
 ```
 
-Optional override for the default chat model (otherwise the app default applies):
+Optional override for the default chat model:
 
 ```bash
-supabase secrets set MIRROR_DEFAULT_CHAT_MODEL=<302_model_id>
+supabase secrets set BUILD_ULTRA_DEFAULT_CHAT_MODEL=<302_model_id>
+# legacy alias still supported:
+# supabase secrets set MIRROR_DEFAULT_CHAT_MODEL=<302_model_id>
 ```
 
 #### `embed` function
@@ -183,7 +185,7 @@ supabase secrets set MIRROR_DEFAULT_CHAT_MODEL=<302_model_id>
   - embeds user query and retrieves relevant docs via `match_documents`
   - injects `Codebase Context` into prompt
   - maps UI model ids to **302.ai** `model` strings for `https://api.302.ai/v1/chat/completions`
-  - for some provider models, sends a **minimal** JSON body (no extra fields that can trigger gateway errors); others include `temperature` and `stream_options.include_usage` where supported
+  - for some provider models, sends a **minimal** JSON body when needed; others include `temperature` and `stream_options.include_usage` where supported
   - streams response as SSE to the extension
   - parses usage totals and deducts quota
   - emits `remaining_tokens` SSE payload for UI updates.
@@ -193,14 +195,14 @@ supabase secrets set MIRROR_DEFAULT_CHAT_MODEL=<302_model_id>
 ## Usage
 
 1. Set `mirror.supabaseUrl` and `mirror.supabaseAnonKey`.
-2. Open **Mirror AI** from the activity bar (sidebar view **Mirror AI**).
+2. Open **Build Ultra** from the activity bar (sidebar view **Ultra AI**).
 3. Log in (or create account).
 4. Click **Index Workspace** to build/update vector index.
 5. Send chat prompts; use **Apply** on a code block to insert or replace the selection in the active editor.
 
 Prompt inputs include:
 
-- `.mirrorrules` (workspace root)
+- `.ultrarules` / `.mirrorrules` (workspace root)
 - editor context (file + selection)
 - terminal context
 - retrieved codebase context (if indexed docs are available).
@@ -219,7 +221,7 @@ Prompt inputs include:
 
 Project layout:
 
-- `src/` — extension host and services
+- `src/` — extension host and services (`BuildUltraChatViewProvider.ts`, …)
 - `webview/src/` — React UI
 - `media/` — built webview assets
 - `supabase/migrations/` — SQL migrations
@@ -243,6 +245,7 @@ Project layout:
 |---|---|
 | Missing Supabase config | Set both `mirror.supabaseUrl` and `mirror.supabaseAnonKey` |
 | Login fails | Email provider enabled and project keys correct |
+| OAuth redirect mismatch | Supabase redirect URL includes `vscode://mirror.build-ultra/auth` |
 | Indexing fails | `embed` deployed, `AI_UPSTREAM_KEY` set, user authenticated |
 | Chat without RAG context | Ensure workspace indexed and vectors exist for current user |
 | Quota errors | Check `public.user_quotas` row exists and has remaining tokens |

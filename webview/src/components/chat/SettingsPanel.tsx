@@ -32,11 +32,11 @@ export function SettingsPanel({
         }}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="mirror-settings-title"
+        aria-labelledby="ultra-settings-title"
       >
         <div className="border-b px-3 py-2.5" style={{ borderColor: "var(--vscode-sideBar-border, rgba(128,128,128,0.2))" }}>
           <h2
-            id="mirror-settings-title"
+            id="ultra-settings-title"
             className="text-[11px] font-semibold uppercase tracking-wide"
             style={{ color: "var(--vscode-descriptionForeground)" }}
           >

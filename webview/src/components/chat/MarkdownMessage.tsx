@@ -28,10 +28,10 @@ export function MarkdownMessage({
 }): React.ReactElement {
   const rootClass =
     variant === "flush"
-      ? "prose prose-mirror prose-sm max-w-none [&_p]:my-2.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:my-0.5"
+      ? "prose prose-ultra prose-sm max-w-none [&_p]:my-2.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:my-0.5"
       : variant === "inline"
-        ? "prose prose-mirror prose-sm max-w-none [&_p]:my-0 [&_p+_p]:mt-2"
-        : "prose prose-mirror prose-sm max-w-none";
+        ? "prose prose-ultra prose-sm max-w-none [&_p]:my-0 [&_p+_p]:mt-2"
+        : "prose prose-ultra prose-sm max-w-none";
 
   return (
     <div className={rootClass}>

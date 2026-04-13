@@ -3,7 +3,7 @@ import type { HostToWebviewMessage } from "../../../src/shared/messages";
 import { postToHost } from "../vscodeApi";
 import { MODEL_OPTIONS, type ChatMessage } from "../types/chat";
 
-export interface MirrorState {
+export interface UltraState {
   isLoggedIn: boolean;
   userLabel: string | null;
   userEmail: string | null;
@@ -34,7 +34,7 @@ export interface MirrorState {
   dismissChatError: () => void;
 }
 
-export const useMirrorStore = create<MirrorState>((set, get) => ({
+export const useUltraStore = create<UltraState>((set, get) => ({
   isLoggedIn: false,
   userLabel: null,
   userEmail: null,
@@ -135,7 +135,7 @@ export const useMirrorStore = create<MirrorState>((set, get) => ({
                 ? {
                     ...m,
                     content:
-                      "Mirror AI returned an empty response. Please try again or choose another model.",
+                      "Ultra AI returned an empty response. Please try again or choose another model.",
                   }
                 : m
             ),

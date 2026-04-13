@@ -4,7 +4,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        mirror: {
+        ultra: {
           surface: "var(--vscode-sideBar-background)",
           fg: "var(--vscode-sideBar-foreground)",
           muted: "var(--vscode-descriptionForeground)",
@@ -31,10 +31,10 @@ module.exports = {
         ui: "var(--vscode-font-size)",
       },
       boxShadow: {
-        mirror: "0 1px 2px rgba(0, 0, 0, 0.06)",
+        ultra: "0 1px 2px rgba(0, 0, 0, 0.06)",
       },
       typography: {
-        mirror: {
+        ultra: {
           css: {
             maxWidth: "none",
             color: "var(--vscode-sideBar-foreground)",

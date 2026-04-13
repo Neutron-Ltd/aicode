@@ -5,14 +5,14 @@ import { EditorService } from "./services/EditorService";
 import { PromptBuilderService } from "./services/PromptBuilderService";
 import { TerminalService } from "./services/TerminalService";
 import { WorkspaceScannerService } from "./services/WorkspaceScannerService";
-import { MirrorChatViewProvider } from "./MirrorChatViewProvider";
+import { BuildUltraChatViewProvider } from "./BuildUltraChatViewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   const editorService = new EditorService();
   const terminalService = new TerminalService();
   const promptBuilder = new PromptBuilderService(editorService, terminalService);
 
-  const provider = new MirrorChatViewProvider(context);
+  const provider = new BuildUltraChatViewProvider(context);
   const auth = new AuthService(context, (msg) => provider.postHostMessage(msg));
   const api = new ApiService(auth, promptBuilder, (msg) =>
     provider.postHostMessage(msg)
@@ -34,7 +34,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
-      MirrorChatViewProvider.viewType,
+      BuildUltraChatViewProvider.viewType,
       provider,
       {
         webviewOptions: {

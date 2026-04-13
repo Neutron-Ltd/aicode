@@ -1,5 +1,5 @@
 /**
- * Mirror — Supabase Edge Function `chat`
+ * Build Ultra — Supabase Edge Function `chat`
  *
  * Secure bridge between the VS Code extension and 302.ai (OpenAI-compatible API).
  * Deploy: `supabase secrets set THREETW_AI_API_KEY=...` or `AI_UPSTREAM_KEY=...` then `supabase functions deploy chat`
@@ -67,7 +67,9 @@ function resolve302AiModelId(raw: string): string {
     return MODEL_302_BY_LABEL[labelKey];
   }
 
-  const fallback = Deno.env.get("MIRROR_DEFAULT_CHAT_MODEL")?.trim();
+  const fallback =
+    Deno.env.get("BUILD_ULTRA_DEFAULT_CHAT_MODEL")?.trim() ||
+    Deno.env.get("MIRROR_DEFAULT_CHAT_MODEL")?.trim();
   if (fallback) return fallback;
 
   return trimmed;
@@ -177,11 +179,11 @@ function buildOpenAIMessages(
   }
 
   const rulesBlock = (workspaceRules ?? "").trim()
-    ? `## Workspace rules (.mirrorrules)\n${workspaceRules.trim()}`
+    ? `## Workspace rules (.ultrarules / .mirrorrules)\n${workspaceRules.trim()}`
     : "(No workspace rules file was provided.)";
 
   const systemContent = [
-    "You are Mirror AI, an AI coding assistant inside VS Code.",
+    "You are Ultra AI, the coding assistant for Build Ultra inside VS Code.",
     "Follow the workspace rules when relevant. Use markdown in replies.",
     "When proposing code changes, always give the full, corrected fenced code block so the user can apply it in one click.",
     "Do not use minimal snippets or partial diffs unless the user explicitly asks for a small, localized change.",
@@ -283,9 +285,9 @@ function resolveUpstreamApiKey(): string | null {
 /**
  * OpenAI/302 stream uses `data: {json}\n\n` with `choices[0].delta.content`.
  * With `stream_options.include_usage`, a final chunk may include `usage` (often with empty `choices`).
- * Mirror extension expects `data: {"delta":"..."}\n\n` and `data: [DONE]\n\n`.
+ * Build Ultra extension expects `data: {"delta":"..."}\n\n` and `data: [DONE]\n\n`.
  */
-async function* transformUpstreamStreamToMirrorSSE(
+async function* transformUpstreamStreamToUltraSSE(
   upstreamBody: ReadableStream<Uint8Array>,
 ): AsyncGenerator<Uint8Array> {
   const reader = upstreamBody.getReader();
@@ -583,7 +585,7 @@ async function handler(req: Request): Promise<Response> {
       let usedTokensFromStream: number | null = null;
       let outputCharCount = 0;
       try {
-        for await (const chunk of transformUpstreamStreamToMirrorSSE(
+        for await (const chunk of transformUpstreamStreamToUltraSSE(
           upstreamBody,
         )) {
           const text = new TextDecoder().decode(chunk);

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { getMirrorSupabaseConfig } from "./AuthService";
+import { getUltraSupabaseConfig } from "./AuthService";
 import type { AuthService } from "./AuthService";
 import type { HostToWebviewMessage } from "../shared/messages";
 
@@ -101,10 +101,10 @@ export class WorkspaceScannerService {
         throw new Error("Open a workspace folder before indexing.");
       }
 
-      const { url, key } = getMirrorSupabaseConfig();
+      const { url, key } = getUltraSupabaseConfig();
       if (!url || !key) {
         throw new Error(
-          "Mirror is not configured. Backend URL and key are missing in the extension build."
+          "Build Ultra is not configured. Backend URL and key are missing in the extension build."
         );
       }
       const token = await this.auth.getSessionAccessToken();

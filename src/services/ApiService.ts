@@ -29,16 +29,16 @@ export class ApiService {
     const anonKey = SUPABASE_ANON_KEY.trim();
     if (!url || !anonKey) {
       const message =
-        "Mirror AI is not configured. Backend URL and key are missing in the extension build.";
+        "Build Ultra is not configured. Backend URL and key are missing in the extension build.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
       return;
     }
 
     if (!this.auth.getSupabaseClient()) {
-      const message = "Mirror AI client not configured.";
+      const message = "Build Ultra client not configured.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
       return;
     }
 
@@ -46,7 +46,7 @@ export class ApiService {
     if (!token) {
       const message = "Sign in to use chat.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
       return;
     }
 
@@ -83,7 +83,7 @@ export class ApiService {
         const errText = await response.text().catch(() => response.statusText);
         const message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
         this.postChatError(message);
-        void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
+        void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
         return;
       }
 
@@ -104,7 +104,7 @@ export class ApiService {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Mirror AI: ${message}`);
+      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
     }
   }
 
