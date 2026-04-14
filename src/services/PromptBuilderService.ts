@@ -4,7 +4,7 @@ import type { EditorService } from "./EditorService";
 import type { TerminalService } from "./TerminalService";
 
 /**
- * `.ultrarules` (legacy: `.mirrorrules`) and chat payload envelope (Chunk 5).
+ * `.ultrarules` and chat payload envelope (Chunk 5).
  */
 export class PromptBuilderService {
   constructor(
@@ -13,7 +13,7 @@ export class PromptBuilderService {
   ) {}
 
   /**
-   * Reads `.ultrarules` from the first workspace folder root, or `.mirrorrules` if present (legacy).
+   * Reads `.ultrarules` from the first workspace folder root.
    */
   async loadWorkspaceRules(): Promise<string> {
     const folder = vscode.workspace.workspaceFolders?.[0];
@@ -21,17 +21,13 @@ export class PromptBuilderService {
       return "";
     }
 
-    const ultraUri = vscode.Uri.joinPath(folder.uri, ".ultrarules");
-    const legacyUri = vscode.Uri.joinPath(folder.uri, ".mirrorrules");
-    for (const rulesUri of [ultraUri, legacyUri]) {
-      try {
-        const data = await vscode.workspace.fs.readFile(rulesUri);
-        return new TextDecoder("utf-8").decode(data);
-      } catch {
-        /* try next */
-      }
+    const rulesUri = vscode.Uri.joinPath(folder.uri, ".ultrarules");
+    try {
+      const data = await vscode.workspace.fs.readFile(rulesUri);
+      return new TextDecoder("utf-8").decode(data);
+    } catch {
+      return "";
     }
-    return "";
   }
 
   /**

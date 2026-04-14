@@ -8,14 +8,11 @@ import { Header } from "../components/chat/Header";
 import { InputArea } from "../components/chat/InputArea";
 import { MessageList } from "../components/chat/MessageList";
 import { SettingsPanel } from "../components/chat/SettingsPanel";
-import { MODEL_OPTIONS } from "../types/chat";
 import { useUltraStore } from "../store/ultraStore";
 
 export function ChatScreen(): React.ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const selectedModelId = useUltraStore((s) => s.selectedModelId);
-  const setSelectedModelId = useUltraStore((s) => s.setSelectedModelId);
   const tokenQuota = useUltraStore((s) => s.tokenQuota);
   const messages = useUltraStore((s) => s.messages);
   const inputDraft = useUltraStore((s) => s.inputDraft);
@@ -48,9 +45,6 @@ export function ChatScreen(): React.ReactElement {
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
         <div className="relative z-20 shrink-0">
           <Header
-            models={MODEL_OPTIONS}
-            selectedModelId={selectedModelId}
-            onModelChange={setSelectedModelId}
             onIndexWorkspace={indexWorkspace}
             isIndexing={isIndexing}
             onClearChat={clearChat}

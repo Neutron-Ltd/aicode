@@ -1,22 +1,15 @@
 import React from "react";
-import type { ModelOption } from "../../types/chat";
 
 const iconBtn =
   "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-200 hover:bg-[color-mix(in_srgb,var(--vscode-toolbar-hoverBackground)_85%,transparent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vscode-focusBorder)] disabled:cursor-not-allowed disabled:opacity-35";
 
 export function Header({
-  models,
-  selectedModelId,
-  onModelChange,
   onIndexWorkspace,
   isIndexing,
   onClearChat,
   clearChatDisabled,
   onOpenSettings,
 }: {
-  models: ModelOption[];
-  selectedModelId: string;
-  onModelChange: (id: string) => void;
   onIndexWorkspace: () => void;
   isIndexing: boolean;
   onClearChat: () => void;
@@ -32,25 +25,17 @@ export function Header({
       }}
     >
       <div className="flex items-center justify-between gap-2 px-2 py-2">
-        <label className="flex min-w-0 flex-1 items-center">
-          <span className="sr-only">Model</span>
-          <select
-            value={selectedModelId}
-            onChange={(e) => onModelChange(e.target.value)}
-            className="max-w-full min-w-0 cursor-pointer rounded-lg border py-1.5 pl-2.5 pr-8 text-[11px] font-medium transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vscode-focusBorder)]"
-            style={{
-              borderColor: "var(--vscode-sideBar-border, rgba(128,128,128,0.35))",
-              backgroundColor: "var(--vscode-input-background)",
-              color: "var(--vscode-input-foreground)",
-            }}
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div
+          className="flex min-w-0 flex-1 items-center rounded-lg border py-1.5 px-2.5 text-[11px] font-medium"
+          style={{
+            borderColor: "var(--vscode-sideBar-border, rgba(128,128,128,0.35))",
+            backgroundColor: "var(--vscode-input-background)",
+            color: "var(--vscode-input-foreground)",
+          }}
+          title="Model routing is configured on the server"
+        >
+          <span className="truncate">Ultra AI</span>
+        </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
           <button

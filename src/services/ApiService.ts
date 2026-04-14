@@ -15,7 +15,7 @@ import type { PromptBuilderService } from "./PromptBuilderService";
  * event: `data: [DONE]\n\n`. Lines may include `{ "error": "..." }` to signal failure.
  * Non-SSE JSON responses fall back to `{ content: string }` or raw text.
  *
- * 302.ai / upstream keys stay **only** in the Edge Function env — never in the extension.
+ * Upstream API keys stay **only** in the Edge Function env — never in the extension.
  */
 export class ApiService {
   constructor(

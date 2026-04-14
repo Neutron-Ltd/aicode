@@ -1,13 +1,15 @@
 /**
  * Build Ultra — Supabase Edge Function `embed`
  *
- * Receives workspace chunks from the extension host, generates embeddings via
- * 302.ai (OpenAI-compatible API), and stores vectors in `workspace_documents`
+ * Receives workspace chunks from the extension host, generates embeddings via a
+ * proprietary OpenAI-compatible API, and stores vectors in `workspace_documents`
  * using the caller's JWT (RLS enforced per-user).
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const UPSTREAM_EMBEDDINGS_URL = "https://api.302.ai/v1/embeddings";
+function resolveUpstreamEmbeddingsUrl(): string | null {
+  return Deno.env.get("BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL")?.trim() || null;
+}
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const EXPECTED_DIM = 1536;
 const MAX_CHUNKS_PER_REQUEST = 2000;
@@ -56,10 +58,11 @@ function batchArray<T>(items: T[], size: number): T[][] {
 }
 
 async function embedBatch(
+  embeddingsUrl: string,
   apiKey: string,
   batch: ChunkInput[]
 ): Promise<number[][]> {
-  const response = await fetch(UPSTREAM_EMBEDDINGS_URL, {
+  const response = await fetch(embeddingsUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -106,10 +109,20 @@ async function handler(req: Request): Promise<Response> {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const upstreamKey = Deno.env.get("AI_UPSTREAM_KEY");
+  const embeddingsUrl = resolveUpstreamEmbeddingsUrl();
   if (!supabaseUrl || !supabaseAnonKey) {
     return jsonResponse(
       { error: "Server misconfiguration: missing Supabase env." },
       500
+    );
+  }
+  if (!embeddingsUrl) {
+    return jsonResponse(
+      {
+        error:
+          "BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL is not set. Use: supabase secrets set BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL=...",
+      },
+      503
     );
   }
   if (!upstreamKey) {
@@ -190,7 +203,7 @@ async function handler(req: Request): Promise<Response> {
   }> = [];
 
   for (const batch of batchArray(chunks, BATCH_SIZE)) {
-    const vectors = await embedBatch(upstreamKey, batch);
+    const vectors = await embedBatch(embeddingsUrl, upstreamKey, batch);
     embedded += vectors.length;
     for (let i = 0; i < batch.length; i++) {
       const b = batch[i];

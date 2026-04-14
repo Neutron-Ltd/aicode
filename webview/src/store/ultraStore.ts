@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { HostToWebviewMessage } from "../../../src/shared/messages";
 import { postToHost } from "../vscodeApi";
-import { MODEL_OPTIONS, type ChatMessage } from "../types/chat";
+import { DEFAULT_CHAT_MODEL_ID, type ChatMessage } from "../types/chat";
 
 export interface UltraState {
   isLoggedIn: boolean;
@@ -15,14 +15,12 @@ export interface UltraState {
   lastPongClientTs: number | null;
   tokenQuota: number;
   isIndexing: boolean;
-  selectedModelId: string;
   messages: ChatMessage[];
   inputDraft: string;
   isSending: boolean;
 
   applyHostMessage: (msg: HostToWebviewMessage) => void;
   setInputDraft: (v: string) => void;
-  setSelectedModelId: (id: string) => void;
   sendPing: () => void;
   indexWorkspace: () => void;
   submitLogin: (email: string, password: string) => void;
@@ -45,7 +43,6 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   lastPongClientTs: null,
   tokenQuota: 142_000,
   isIndexing: false,
-  selectedModelId: MODEL_OPTIONS[0].id,
   messages: [],
   inputDraft: "",
   isSending: false,
@@ -135,7 +132,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
                 ? {
                     ...m,
                     content:
-                      "Ultra AI returned an empty response. Please try again or choose another model.",
+                      "Ultra AI returned an empty response. Please try again.",
                   }
                 : m
             ),
@@ -167,8 +164,6 @@ export const useUltraStore = create<UltraState>((set, get) => ({
 
   setInputDraft: (v: string) => set({ inputDraft: v }),
 
-  setSelectedModelId: (id: string) => set({ selectedModelId: id }),
-
   sendPing: () => {
     postToHost({ type: "PING", payload: { clientTs: Date.now() } });
   },
@@ -195,7 +190,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   sendUserMessage: () => {
-    const { inputDraft, selectedModelId } = get();
+    const { inputDraft } = get();
     const text = inputDraft.trim();
     if (!text) return;
 
@@ -214,7 +209,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
 
     postToHost({
       type: "SEND_MESSAGE",
-      payload: { text, modelId: selectedModelId },
+      payload: { text, modelId: DEFAULT_CHAT_MODEL_ID },
     });
   },
 

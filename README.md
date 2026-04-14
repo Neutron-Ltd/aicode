@@ -96,12 +96,12 @@ The PRD describes the Edge layer talking to **Cursor’s** APIs, with the extens
 
 **Status:** ❌ No
 
-The implementation uses **302.ai** (OpenAI-compatible HTTP), not Cursor.
+The implementation uses a **proprietary OpenAI-compatible upstream** (URLs and keys only in Edge env), not Cursor.
 
 **Technical reference**
 
-- Chat upstream: `supabase/functions/chat/index.ts` (early lines define 302 base URL / model mapping).
-- Embeddings: `supabase/functions/embed/index.ts` (line ~10).
+- Chat upstream URL: `BUILD_ULTRA_UPSTREAM_CHAT_URL` in `supabase/functions/chat/index.ts`.
+- Embeddings URL: `BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL` in `supabase/functions/embed/index.ts`.
 
 ------------------------------------------------------------------------------------------
 
@@ -473,13 +473,13 @@ Upstream keys live only in Edge. The bundle still embeds `SUPABASE_URL` and `SUP
 
 The extension should not know the final LLM vendor—only your `…/functions/v1/…` endpoints.
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes
 
-The extension calls Supabase Functions. The PRD names **Cursor**; the server routes to **302.ai** inside Edge.
+The extension calls Supabase Functions only. Upstream chat/embed URLs are configured via Edge secrets (`BUILD_ULTRA_UPSTREAM_*`); the client bundle does not contain vendor endpoints.
 
 **Technical reference**
 
-- `supabase/functions/chat/index.ts`
+- `supabase/functions/chat/index.ts`, `supabase/functions/embed/index.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -623,9 +623,13 @@ Review diffs in the editor before applying.
 
 These are real behaviors worth knowing about; they are **not** claims that earlier PRD rows are fully satisfied.
 
-### 7.1 302.ai as OpenAI-compatible upstream
+**Section 7 cleanup (done):** Env-based upstream URLs, opaque model routing (no vendor catalog in UI or `MODEL_302_*` on Edge), `.ultrarules` only, and **`BUILD_ULTRA_DEFAULT_CHAT_MODEL` only** (legacy `MIRROR_DEFAULT_CHAT_MODEL` removed). Items below use **Status** lines: ✅ **Done** = updated by that pass; ✅ **Kept** = intentionally unchanged (SSE, apply, scanner, CORS).
 
-Edge calls 302’s HTTP API for chat and embeddings instead of Cursor-only routing.
+### 7.1 Upstream OpenAI-compatible URLs on Edge ✅ Done
+
+Chat and embeddings call configurable upstream endpoints (no hardcoded vendor base URLs in source).
+
+**Status:** ✅ Done — `BUILD_ULTRA_UPSTREAM_CHAT_URL` / `BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL` in Edge env.
 
 **Technical reference**
 
@@ -634,20 +638,25 @@ Edge calls 302’s HTTP API for chat and embeddings instead of Cursor-only routi
 
 ------------------------------------------------------------------------------------------
 
-### 7.2 Model catalog and mapping
+### 7.2 Opaque model routing (no UI catalog) ✅ Done
 
-Chat UI exposes model labels; the server maps them to 302 model IDs.
+The webview sends a fixed opaque `modelId`; the Edge function passes it through or falls back to `BUILD_ULTRA_DEFAULT_CHAT_MODEL`.
+
+**Status:** ✅ Done — no model dropdown / `MODEL_OPTIONS`; no `MODEL_302_BY_*` in `chat`.
 
 **Technical reference**
 
-- `webview/src/types/chat.ts`
-- `MODEL_302_BY_*` in `supabase/functions/chat/index.ts`
+- `webview/src/types/chat.ts` (`DEFAULT_CHAT_MODEL_ID`)
+- `webview/src/components/chat/Header.tsx`
+- `supabase/functions/chat/index.ts` (`resolveUpstreamModel`)
 
 ------------------------------------------------------------------------------------------
 
-### 7.3 Streaming protocol (SSE)
+### 7.3 Streaming protocol (SSE) ✅ Kept
 
 The extension host parses server-sent events and forwards stream messages to the webview.
+
+**Status:** ✅ Kept — SSE parsing in `ApiService` unchanged by the cleanup pass.
 
 **Technical reference**
 
@@ -656,9 +665,11 @@ The extension host parses server-sent events and forwards stream messages to the
 
 ------------------------------------------------------------------------------------------
 
-### 7.4 Apply behavior
+### 7.4 Apply behavior ✅ Kept
 
 Inserts code or replaces the current selection depending on context; requires an explicit **Apply** click.
+
+**Status:** ✅ Kept — `EditorService.applyCodeFromChat` unchanged.
 
 **Technical reference**
 
@@ -666,19 +677,24 @@ Inserts code or replaces the current selection depending on context; requires an
 
 ------------------------------------------------------------------------------------------
 
-### 7.5 Workspace rules files
+### 7.5 Workspace rules files (`.ultrarules` only) ✅ Done
 
-Prompt builder reads `.ultrarules` first, then legacy `.mirrorrules`.
+Prompt builder reads **only** `.ultrarules` at the workspace root.
+
+**Status:** ✅ Done — legacy `.mirrorrules` fallback removed.
 
 **Technical reference**
 
 - `src/services/PromptBuilderService.ts`
+- System prompt heading in `supabase/functions/chat/index.ts` (`buildOpenAIMessages`)
 
 ------------------------------------------------------------------------------------------
 
-### 7.6 Scanner heuristics
+### 7.6 Scanner heuristics ✅ Kept
 
 Binary extensions, chunk sizes, and ignore logic live in the workspace scanner.
+
+**Status:** ✅ Kept — blocklists/chunking unchanged.
 
 **Technical reference**
 
@@ -686,15 +702,17 @@ Binary extensions, chunk sizes, and ignore logic live in the workspace scanner.
 
 ------------------------------------------------------------------------------------------
 
-### 7.7 CORS
+### 7.7 CORS ✅ Kept
 
 Edge responses include OPTIONS handling and CORS headers for cross-origin clients.
 
+**Status:** ✅ Kept — `corsHeaders` + OPTIONS unchanged.
+
 ------------------------------------------------------------------------------------------
 
-### 7.8 Default model environment variables
+### 7.8 Default model environment variable ✅ Done
 
-`BUILD_ULTRA_DEFAULT_CHAT_MODEL` and legacy `MIRROR_DEFAULT_CHAT_MODEL`.
+**Status:** ✅ Done — only `BUILD_ULTRA_DEFAULT_CHAT_MODEL` (plus in-code fallback `"default"` when unset); `MIRROR_DEFAULT_CHAT_MODEL` removed.
 
 **Technical reference**
 

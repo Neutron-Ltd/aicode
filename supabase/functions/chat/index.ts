@@ -1,8 +1,9 @@
 /**
  * Build Ultra — Supabase Edge Function `chat`
  *
- * Secure bridge between the VS Code extension and 302.ai (OpenAI-compatible API).
- * Deploy: `supabase secrets set THREETW_AI_API_KEY=...` or `AI_UPSTREAM_KEY=...` then `supabase functions deploy chat`
+ * Secure bridge between the VS Code extension and a proprietary OpenAI-compatible upstream.
+ * Deploy: set `BUILD_ULTRA_UPSTREAM_CHAT_URL`, `BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL`, and
+ * `AI_UPSTREAM_KEY` (or `THREETW_AI_API_KEY`) then `supabase functions deploy chat`
  *
  * **Client (extension):** POST JSON `ChatPayload` + `Authorization: Bearer <user_jwt>` + `apikey: <anon>`.
  * **Response:** `text/event-stream` with lines `data: {"delta":"..."}\n\n` and terminal `data: [DONE]\n\n`.
@@ -14,91 +15,47 @@
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-/** 302.ai OpenAI-compatible chat endpoint */
-const UPSTREAM_CHAT_URL = "https://api.302.ai/v1/chat/completions";
-const UPSTREAM_EMBEDDINGS_URL = "https://api.302.ai/v1/embeddings";
 const EMBEDDING_MODEL = "text-embedding-3-small";
 
 /** Avoid sending huge files on every request (tune as needed). */
 const MAX_EDITOR_FILE_CHARS = 120_000;
 
-/** 302.AI `/v1/chat/completions` — strict OpenAI-compatible body uses this temperature. */
+/** OpenAI-compatible `/v1/chat/completions` body uses this temperature. */
 const CHAT_TEMPERATURE = 0.7;
 
 /**
- * Technical model IDs for https://api.302.ai/v1/chat/completions — invalid `model` returns -10003.
- * Slug keys match `modelId` from the extension (lowercase).
- * Label keys: normalizeModelKey(friendly label).
+ * When `modelId` is empty and `BUILD_ULTRA_DEFAULT_CHAT_MODEL` is unset.
+ * Upstream routing is opaque; this is only a deterministic last resort.
  */
-const MODEL_302_BY_SLUG: Record<string, string> = {
-  "gpt-5.4-nano": "gpt-5.4-nano",
-  "grok-code-fast": "grok-code-fast-1",
-  "qwen-3.5": "qwen3.5-35b-a3b",
-  doubao: "doubao-seed-code-preview-latest",
-};
+const FALLBACK_UPSTREAM_MODEL = "default";
 
-const MODEL_302_BY_LABEL: Record<string, string> = {
-  "gpt 5.4 nano": "gpt-5.4-nano",
-  "gpt 5.4 nano (default)": "gpt-5.4-nano",
-  "grok code fast": "grok-code-fast-1",
-  "qwen 3.5": "qwen3.5-35b-a3b",
-  duobao: "doubao-seed-code-preview-latest",
-};
-
-function normalizeModelKey(input: string): string {
-  return input.trim().replace(/\s+/g, " ").toLowerCase();
+function resolveUpstreamChatUrl(): string | null {
+  return Deno.env.get("BUILD_ULTRA_UPSTREAM_CHAT_URL")?.trim() || null;
 }
 
-const DEFAULT_UPSTREAM_MODEL =
-  MODEL_302_BY_SLUG["gpt-5.4-nano"] ?? "gpt-5.4-nano";
-
-/** Resolves extension `modelId` or a friendly display name to a 302.AI `model` string. */
-function resolve302AiModelId(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return DEFAULT_UPSTREAM_MODEL;
-
-  const slugKey = trimmed.toLowerCase();
-  if (MODEL_302_BY_SLUG[slugKey]) {
-    return MODEL_302_BY_SLUG[slugKey];
-  }
-
-  const labelKey = normalizeModelKey(trimmed);
-  if (MODEL_302_BY_LABEL[labelKey]) {
-    return MODEL_302_BY_LABEL[labelKey];
-  }
-
-  const fallback =
-    Deno.env.get("BUILD_ULTRA_DEFAULT_CHAT_MODEL")?.trim() ||
-    Deno.env.get("MIRROR_DEFAULT_CHAT_MODEL")?.trim();
-  if (fallback) return fallback;
-
-  return trimmed;
+function resolveUpstreamEmbeddingsUrl(): string | null {
+  return Deno.env.get("BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL")?.trim() || null;
 }
 
-/**
- * Thinking / code-specialized models: omit `temperature` and `stream_options` so 302.AI
- * does not reject the request (-10003) on providers that only accept a minimal OpenAI body.
- */
-const MINIMAL_PAYLOAD_UPSTREAM_MODEL_IDS = new Set<string>([
-  "grok-code-fast-1",
-  "doubao-seed-code-preview-latest",
-]);
+/** Passes through non-empty `modelId`; otherwise env default or {@link FALLBACK_UPSTREAM_MODEL}. */
+function resolveUpstreamModel(raw: string): string {
+  const t = raw.trim();
+  if (t) return t;
+  return Deno.env.get("BUILD_ULTRA_DEFAULT_CHAT_MODEL")?.trim() ||
+    FALLBACK_UPSTREAM_MODEL;
+}
 
 function buildUpstreamChatRequestBody(
   upstreamModel: string,
   messages: ReturnType<typeof sanitizeChatMessages>,
 ): Record<string, unknown> {
-  const base: Record<string, unknown> = {
+  return {
     model: upstreamModel,
     messages,
     stream: true,
+    temperature: CHAT_TEMPERATURE,
+    stream_options: { include_usage: true },
   };
-  if (MINIMAL_PAYLOAD_UPSTREAM_MODEL_IDS.has(upstreamModel)) {
-    return base;
-  }
-  base.temperature = CHAT_TEMPERATURE;
-  base.stream_options = { include_usage: true };
-  return base;
 }
 
 /** Ensures non-empty, valid roles and string content for the upstream API. */
@@ -179,7 +136,7 @@ function buildOpenAIMessages(
   }
 
   const rulesBlock = (workspaceRules ?? "").trim()
-    ? `## Workspace rules (.ultrarules / .mirrorrules)\n${workspaceRules.trim()}`
+    ? `## Workspace rules (.ultrarules)\n${workspaceRules.trim()}`
     : "(No workspace rules file was provided.)";
 
   const systemContent = [
@@ -216,8 +173,12 @@ function buildOpenAIMessages(
   ];
 }
 
-async function embedText(apiKey: string, input: string): Promise<number[]> {
-  const response = await fetch(UPSTREAM_EMBEDDINGS_URL, {
+async function embedText(
+  apiKey: string,
+  embeddingsUrl: string,
+  input: string,
+): Promise<number[]> {
+  const response = await fetch(embeddingsUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -275,7 +236,7 @@ function extractAssistantDeltaText(chunk: unknown): string | null {
   return null;
 }
 
-/** Resolve 302.AI key: prefer explicit name, then legacy secret. */
+/** Prefer explicit name, then shared secret. */
 function resolveUpstreamApiKey(): string | null {
   const a = Deno.env.get("THREETW_AI_API_KEY")?.trim();
   const b = Deno.env.get("AI_UPSTREAM_KEY")?.trim();
@@ -283,7 +244,7 @@ function resolveUpstreamApiKey(): string | null {
 }
 
 /**
- * OpenAI/302 stream uses `data: {json}\n\n` with `choices[0].delta.content`.
+ * OpenAI-compatible stream uses `data: {json}\n\n` with `choices[0].delta.content`.
  * With `stream_options.include_usage`, a final chunk may include `usage` (often with empty `choices`).
  * Build Ultra extension expects `data: {"delta":"..."}\n\n` and `data: [DONE]\n\n`.
  */
@@ -304,7 +265,7 @@ async function* transformUpstreamStreamToUltraSSE(
       }
       if (value?.length) {
         const rawPreview = new TextDecoder().decode(value).slice(0, 50);
-        console.log("[302 upstream raw chunk]", rawPreview);
+        console.log("[upstream raw chunk]", rawPreview);
       }
       buffer += decoder.decode(value, { stream: true });
 
@@ -404,6 +365,18 @@ async function handler(req: Request): Promise<Response> {
     );
   }
 
+  const upstreamChatUrl = resolveUpstreamChatUrl();
+  const upstreamEmbeddingsUrl = resolveUpstreamEmbeddingsUrl();
+  if (!upstreamChatUrl || !upstreamEmbeddingsUrl) {
+    return jsonResponse(
+      {
+        error:
+          "BUILD_ULTRA_UPSTREAM_CHAT_URL and BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL must be set.",
+      },
+      503,
+    );
+  }
+
   const authHeader = req.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
     return jsonResponse({ error: "Missing or invalid Authorization" }, 401);
@@ -440,11 +413,8 @@ async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: "Missing query" }, 400);
   }
 
-  const uiModelId =
-    typeof payload.modelId === "string" && payload.modelId.trim()
-      ? payload.modelId.trim()
-      : "gpt-5.4-nano";
-  const upstreamModel = resolve302AiModelId(uiModelId);
+  const uiModelId = typeof payload.modelId === "string" ? payload.modelId : "";
+  const upstreamModel = resolveUpstreamModel(uiModelId);
 
   if (!payload.editorContext || typeof payload.editorContext !== "object") {
     return jsonResponse({ error: "Missing editorContext" }, 400);
@@ -486,7 +456,11 @@ async function handler(req: Request): Promise<Response> {
 
   let codebaseContext = "";
   try {
-    const queryEmbedding = await embedText(apiKey, payload.query);
+    const queryEmbedding = await embedText(
+      apiKey,
+      upstreamEmbeddingsUrl,
+      payload.query,
+    );
     const { data: matches, error: matchErr } = await dbClient.rpc(
       "match_documents",
       {
@@ -527,9 +501,9 @@ async function handler(req: Request): Promise<Response> {
 
   const requestBody = buildUpstreamChatRequestBody(upstreamModel, messages);
 
-  console.log("Sending to 302.AI:", JSON.stringify(requestBody, null, 2));
+  console.log("Sending to upstream:", JSON.stringify(requestBody, null, 2));
 
-  const upstreamResponse = await fetch(UPSTREAM_CHAT_URL, {
+  const upstreamResponse = await fetch(upstreamChatUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
