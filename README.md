@@ -1,6 +1,6 @@
 # Product Requirements Document: Build Ultra
 
-*Last reviewed against codebase: audit pass (static analysis).*
+*Last reviewed against codebase: Section 3 PRD alignment pass (Apr 2026).*
 
 ### How to read status labels
 
@@ -190,10 +190,13 @@ Named tiers, live quota display, and monthly token top-ups (usually tied to bill
 
 **Status:** ⚠️ Partial
 
-Quotas exist in the database and are reduced after chat. There is no Stripe-driven tiering or scheduled “refill” jobs in code.
+**Done in repo:** `stripe-webhook` maps tiers to `TIER_QUOTAS`, updates `total_quota`, resets `tokens_used` on checkout/subscription events, stores `next_token_refill_at` / billing metadata in `entitlements`, and idempotency via checkout session id. Schema includes `next_token_refill_at` where migrated.
+
+**Gap vs ideal “monthly refill”:** refill timing is driven by Stripe subscription/checkout events, not a separate calendar cron—document as v1.
 
 **Technical reference**
 
+- `supabase/functions/stripe-webhook/index.ts`
 - `user_quotas` usage and deduction: `supabase/functions/chat/index.ts`
 
 ------------------------------------------------------------------------------------------
@@ -208,11 +211,12 @@ Optionally rewriting or enriching the user message before it hits the model for 
 
 **Status:** ⚠️ Partial
 
-Context is assembled on the client; there is no separate optimizer step or second LLM pass.
+Context is structured on the client (`ChatPayload`: rules, editor, terminal, diagnostics); Edge assembles **system** (DB master prompt) + **context user** + **query user**. There is still no separate optimizer LLM pass.
 
 **Technical reference**
 
-- `src/services/PromptBuilderService.ts`
+- `src/services/PromptBuilderService.ts`, `src/types/chatPayload.ts`
+- `supabase/functions/chat/index.ts` — `assembleChatMessages`
 
 ------------------------------------------------------------------------------------------
 
@@ -220,7 +224,14 @@ Context is assembled on the client; there is no separate optimizer step or secon
 
 Automatically expanding vague requests and forcing step-by-step reasoning in the model.
 
-**Status:** ❌ No
+**Status:** ✅ Yes (via DB master prompt)
+
+The seeded `master_prompts` default row instructs step-by-step reasoning before code; there is no separate query-expansion model.
+
+**Technical reference**
+
+- `supabase/migrations/20260415140001_seed_default_master_prompt.sql`
+- `supabase/functions/chat/index.ts` — `fetchMasterSystemPrompt`
 
 ------------------------------------------------------------------------------------------
 
@@ -230,11 +241,14 @@ For small fixes, the model should change only what’s needed instead of dumping
 
 **Status:** ⚠️ Partial
 
-The Edge system instructions encourage **full fenced code blocks** so the **Apply** button works—a different tradeoff than “minimal diff only.”
+**Done in repo:** Master prompt + `write_file` tool schema emphasize **line `range`** for small edits; host-side `ToolExecutionService` can refuse risky full-file replaces and prompts the user when replacing **>50 lines** without a range.
+
+**Still true:** Markdown **Apply** on fenced blocks is a separate path that inserts/replaces selection—not a ranged diff.
 
 **Technical reference**
 
-- System / instructions in `supabase/functions/chat/index.ts` (from roughly line 185 onward).
+- `supabase/functions/chat/index.ts` — `OPENAI_TOOLS`, `assembleChatMessages`
+- `src/services/ToolExecutionService.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -242,13 +256,14 @@ The Edge system instructions encourage **full fenced code blocks** so the **Appl
 
 The canonical system prompt is stored in Supabase and never shipped inside the VSIX; only Edge injects it.
 
-**Status:** ❌ No
+**Status:** ✅ Yes
 
-The system prompt is **hardcoded** in Edge (`buildOpenAIMessages`), not loaded from a `master_prompt` table.
+Edge loads `master_prompts` (`name = 'default'`, latest `version`) with the user JWT (RLS allows `authenticated` read). System message = DB content only; context/query are separate user turns.
 
 **Technical reference**
 
-- `supabase/functions/chat/index.ts` — `buildOpenAIMessages`
+- `supabase/functions/chat/index.ts` — `fetchMasterSystemPrompt`, `assembleChatMessages`
+- Migrations: RLS policy + seed for `master_prompts`
 
 ------------------------------------------------------------------------------------------
 
@@ -284,9 +299,13 @@ A clear loading state before the first token arrives.
 
 Each assistant message should visibly show that it came from Ultra AI (for example a header chip).
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes
 
-The thinking state is labeled; individual assistant bubbles are rendered as markdown **without** a per-message “Ultra AI” badge (badges were removed in an earlier iteration).
+Each assistant bubble has a small **“Ultra AI”** label above the markdown body (in addition to the “thinking” skeleton).
+
+**Technical reference**
+
+- `webview/src/components/chat/MessageList.tsx`
 
 ------------------------------------------------------------------------------------------
 
@@ -298,9 +317,14 @@ Structured tools (JSON) for file operations versus free-form chat; safe concurre
 
 The model returns parseable tool calls and the extension runs them in an agent loop.
 
-**Status:** ❌ No
+**Status:** ✅ Yes
 
-Chat returns **markdown**; there is no tool-call JSON loop in the extension.
+Edge sends OpenAI-style `tools`; SSE emits finalized `tool_calls`; `ApiService` executes tools via `ToolExecutionService` and posts follow-up requests with `conversationOverride` (multi-round cap).
+
+**Technical reference**
+
+- `supabase/functions/chat/index.ts` — `OPENAI_TOOLS`, stream finalize
+- `src/services/ApiService.ts`, `src/services/ToolExecutionService.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -308,11 +332,15 @@ Chat returns **markdown**; there is no tool-call JSON loop in the extension.
 
 Partial updates with line ranges, using document version and AST so edits stay correct if the user types during a stream.
 
-**Status:** ❌ No
+**Status:** ⚠️ Partial
+
+**Done:** `write_file` accepts optional **1-based line `range`**; `ToolExecutionService` applies `WorkspaceEdit` and can compare `TextDocument.version` when an expected version is supplied in the tool protocol (host passes a version map where applicable).
+
+**Gap:** No AST-based merge layer; version alignment depends on tool args / follow-up state, not a full IDE AST pipeline.
 
 **Technical reference**
 
-- Nothing equivalent under `src/` as described.
+- `src/services/ToolExecutionService.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -320,11 +348,14 @@ Partial updates with line ranges, using document version and AST so edits stay c
 
 AI edits should use `vscode.WorkspaceEdit` so undo/redo behaves consistently.
 
-**Status:** ❌ No
+**Status:** ✅ Yes
+
+Chat “Apply” inserts/replaces via `WorkspaceEdit` + `applyEdit`. Tool-driven writes also use `WorkspaceEdit` in `ToolExecutionService`.
 
 **Technical reference**
 
-- `src/services/EditorService.ts` uses `TextEditor.edit` (lines ~45–51).
+- `src/services/EditorService.ts` — `applyCodeFromChat`
+- `src/services/ToolExecutionService.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -350,12 +381,12 @@ The index updates continuously or on save, with ignore rules including a project
 
 **Status:** ⚠️ Partial
 
-Indexing is **manual** (“Index Workspace” action). `.gitignore` is respected; **`.buildultraignore` is not parsed**.
+Indexing remains **manual** (“Index Workspace”). **`.buildultraignore`** is loaded and merged with `.gitignore` patterns for the scanner walk.
 
 **Technical reference**
 
 - `webview/src/store/ultraStore.ts`
-- `src/services/WorkspaceScannerService.ts` — `HARD_IGNORED_DIRS`, `.gitignore` handling ~line 204 onward.
+- `src/services/WorkspaceScannerService.ts` — `loadBuildUltraIgnorePatterns`, `loadGitignorePatterns`
 
 ------------------------------------------------------------------------------------------
 
@@ -411,11 +442,14 @@ The prompt includes the current file and highlighted text when available.
 
 Errors and warnings from VS Code language services are included in the prompt.
 
-**Status:** ❌ No
+**Status:** ✅ Yes
+
+`PromptBuilderService` reads `vscode.languages.getDiagnostics` for the active file and sends a compact `diagnosticsSummary` in `ChatPayload`; Edge includes it in the context user message.
 
 **Technical reference**
 
-- No `vscode.languages.getDiagnostics` wiring found.
+- `src/services/PromptBuilderService.ts` — `getDiagnosticsSummaryForActiveFile`
+- `supabase/functions/chat/index.ts` — `buildContextUserMessage`
 
 ------------------------------------------------------------------------------------------
 
@@ -423,13 +457,13 @@ Errors and warnings from VS Code language services are included in the prompt.
 
 Truncate or prioritize by **token** count to respect model limits.
 
-**Status:** ❌ No
+**Status:** ⚠️ Partial
 
-A **character** cap (`MAX_EDITOR_FILE_CHARS`) is used instead.
+**Done:** `truncateContextParts` trims **RAG first**, then active file text, under `MAX_CONTEXT_CHARS`; `estimateTokens` uses a **length/4** approximation and prompt size is logged—not full **tiktoken** WASM.
 
 **Technical reference**
 
-- `supabase/functions/chat/index.ts` — ~lines 23, 175–177.
+- `supabase/functions/chat/index.ts` — `estimateTokens`, `truncateContextParts`, `MAX_EDITOR_FILE_CHARS`
 
 ------------------------------------------------------------------------------------------
 
@@ -443,10 +477,13 @@ Secrets and VCS internals should not be sent to the model or overwritten blindly
 
 **Status:** ⚠️ Partial
 
-The workspace scanner skips directories like `.git`. If the user **opens** `.env` as the active file, that content can still reach the prompt—there is no dedicated denylist for chat context.
+**Done:** Tool paths are checked with `src/tooling/toolPathGuards.ts` (blocks `.git/**`, `.env*`, etc.) before read/write. Scanner still hard-ignores `.git` and similar.
+
+**Gap:** If the user **opens** a sensitive file as the **active editor**, that content can still be included in the chat context bundle—tool blocklist does not strip editor payload.
 
 **Technical reference**
 
+- `src/tooling/toolPathGuards.ts`, `src/services/ToolExecutionService.ts`
 - `src/services/WorkspaceScannerService.ts` — `HARD_IGNORED_DIRS`
 
 ------------------------------------------------------------------------------------------
@@ -455,11 +492,15 @@ The workspace scanner skips directories like `.git`. If the user **opens** `.env
 
 Deleting large files should require explicit confirmation.
 
-**Status:** ❌ No
+**Status:** ⚠️ Partial
+
+**Done:** Full-file `write_file` without a line `range` on files with **>50 lines** opens a **modal** confirmation before applying the edit.
+
+**Gap:** No dedicated **delete_file** tool; no webview `TOOL_CONFIRM_REQUEST` / `TOOL_CONFIRM_RESPONSE` protocol (plan optional)—confirmation is host modal only.
 
 **Technical reference**
 
-- No AI delete tool or 50-line confirmation flow.
+- `src/services/ToolExecutionService.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -471,13 +512,13 @@ Key handling, hiding upstream providers, JWT checks, and rate limits.
 
 Provider secrets must not ship in the VSIX; service keys stay in Edge environment variables.
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes (as designed for Supabase anon)
 
-Upstream keys live only in Edge. The bundle still embeds `SUPABASE_URL` and `SUPABASE_ANON_KEY` (the anon key is public by design, but it is still in the client bundle).
+Upstream AI keys stay in Edge env only. **`SUPABASE_URL` / `SUPABASE_ANON_KEY`** are compiled from **`.env`** via `scripts/gen-config.mjs` → `src/config.generated.ts` (not hand-edited literals in `config.ts`). The anon key remains in the VSIX by design (public client key); **service role** never ships to the extension.
 
 **Technical reference**
 
-- `src/config.ts`
+- `scripts/gen-config.mjs`, `.env.example`, `src/config.ts`, `src/config.generated.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -511,9 +552,13 @@ Each function verifies the user JWT before doing work.
 
 Sometimes platform JWT middleware is turned off and validation happens in code.
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes
 
-`verify_jwt = false` appears for **`[functions.chat]`** in `supabase/config.toml`; there is no `[functions.embed]` block in the repo.
+`verify_jwt = false` is set for **`[functions.chat]`**, **`[functions.stripe-webhook]`**, and **`[functions.embed]`**; JWT/user checks occur inside each function handler.
+
+**Technical reference**
+
+- `supabase/config.toml`
 
 ------------------------------------------------------------------------------------------
 
@@ -521,9 +566,14 @@ Sometimes platform JWT middleware is turned off and validation happens in code.
 
 Per-user throttling to protect APIs beyond quota accounting.
 
-**Status:** ❌ No
+**Status:** ✅ Yes (DB-backed)
 
-Quota deduction exists; there is no token-bucket rate limiter in the function code.
+Per-user requests per rolling minute bucket are tracked in Postgres (`chat_rate_counters`); over limit returns **429**. This is separate from token **quota** accounting.
+
+**Technical reference**
+
+- `supabase/functions/chat/index.ts` — `enforceRateLimit`
+- Related migration: `chat_rate_counters` (see `supabase/migrations/`)
 
 ------------------------------------------------------------------------------------------
 
@@ -681,7 +731,7 @@ The extension host parses server-sent events and forwards stream messages to the
 
 Inserts code or replaces the current selection depending on context; requires an explicit **Apply** click.
 
-**Status:** ✅ Kept — `EditorService.applyCodeFromChat` unchanged.
+**Status:** ✅ Kept — behavior unchanged; implementation uses `WorkspaceEdit` + `applyEdit` for consistent undo semantics.
 
 **Technical reference**
 
@@ -698,7 +748,7 @@ Prompt builder reads **only** `.ultrarules` at the workspace root.
 **Technical reference**
 
 - `src/services/PromptBuilderService.ts`
-- System prompt heading in `supabase/functions/chat/index.ts` (`buildOpenAIMessages`)
+- Edge context assembly in `supabase/functions/chat/index.ts` (`assembleChatMessages`, `buildContextUserMessage`)
 
 ------------------------------------------------------------------------------------------
 

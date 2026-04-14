@@ -5,6 +5,7 @@ import { EditorService } from "./services/EditorService";
 import { PromptBuilderService } from "./services/PromptBuilderService";
 import { TerminalService } from "./services/TerminalService";
 import { WorkspaceScannerService } from "./services/WorkspaceScannerService";
+import { ToolExecutionService } from "./services/ToolExecutionService";
 import { BuildUltraChatViewProvider } from "./BuildUltraChatViewProvider";
 import { initExtensionTelemetry, shutdownExtensionTelemetry } from "./telemetry";
 
@@ -16,7 +17,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const provider = new BuildUltraChatViewProvider(context);
   const auth = new AuthService(context, (msg) => provider.postHostMessage(msg));
-  const api = new ApiService(auth, promptBuilder, (msg) =>
+  const toolExecution = new ToolExecutionService(
+    () => vscode.workspace.workspaceFolders?.[0]?.uri ?? null
+  );
+  const api = new ApiService(auth, promptBuilder, toolExecution, (msg) =>
     provider.postHostMessage(msg)
   );
   const scanner = new WorkspaceScannerService(auth, (msg) =>

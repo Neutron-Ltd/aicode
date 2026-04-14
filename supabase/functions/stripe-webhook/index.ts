@@ -1,11 +1,12 @@
 /**
- * Stripe webhook — verifies `checkout.session.completed` and updates `user_quotas`.
+ * Stripe webhook — syncs tiers, token allowances, and refill scheduling with `user_quotas`.
  *
  * Secrets: STRIPE_WEBHOOK_SECRET, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
- * Optional: STRIPE_SECRET_KEY (only if Stripe client needs a real key; webhook verify uses webhook secret).
+ * Optional: STRIPE_SECRET_KEY (retrieve Subscription period end for `next_token_refill_at`).
  *
- * Checkout sessions should set `metadata.supabase_user_id` to the auth user UUID (or use `client_reference_id`).
- * Optional metadata: `tier`, `total_quota` (integer string), `entitlements` (JSON string).
+ * Events:
+ * - `checkout.session.completed` — upgrade path: reset `tokens_used`, set `total_quota` / `tier`, idempotent per session id.
+ * - `customer.subscription.updated` — monthly boundary: reset `tokens_used` to 0, refresh `next_token_refill_at`.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import Stripe from "https://esm.sh/stripe@14.25.0?target=deno";
@@ -18,6 +19,13 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Max-Age": "86400",
 };
 
+/** Monthly token allowance caps per product tier. */
+const TIER_QUOTAS: Record<"free" | "pro" | "ultra", number> = {
+  free: 150_000,
+  pro: 500_000,
+  ultra: 2_000_000,
+};
+
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -28,7 +36,15 @@ function jsonResponse(body: unknown, status: number): Response {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function parseUserId(session: Stripe.Checkout.Session): string | null {
+function normalizeTier(raw: string | undefined): "free" | "pro" | "ultra" {
+  const t = raw?.trim().toLowerCase() ?? "";
+  if (t === "ultra" || t === "enterprise") return "ultra";
+  if (t === "pro" || t === "professional") return "pro";
+  if (t === "free") return "free";
+  return "pro";
+}
+
+function parseUserIdFromSession(session: Stripe.Checkout.Session): string | null {
   const meta = session.metadata?.supabase_user_id?.trim();
   if (meta && UUID_RE.test(meta)) return meta;
   const ref = session.client_reference_id?.trim();
@@ -36,24 +52,10 @@ function parseUserId(session: Stripe.Checkout.Session): string | null {
   return null;
 }
 
-function buildEntitlements(
-  session: Stripe.Checkout.Session,
-): Record<string, unknown> {
-  const raw = session.metadata?.entitlements?.trim();
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      /* fall through */
-    }
-  }
-  return {
-    stripe_checkout: true,
-    checkout_session_id: session.id,
-  };
+function parseUserIdFromSubscription(sub: Stripe.Subscription): string | null {
+  const meta = sub.metadata?.supabase_user_id?.trim();
+  if (meta && UUID_RE.test(meta)) return meta;
+  return null;
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -99,16 +101,35 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return jsonResponse({ error: `Webhook signature verification failed: ${msg}` }, 400);
   }
 
-  if (event.type !== "checkout.session.completed") {
-    return jsonResponse({ received: true, ignored: event.type }, 200);
+  const admin = createClient(supabaseUrl, serviceKey);
+
+  if (event.type === "checkout.session.completed") {
+    return await handleCheckoutCompleted(
+      stripe,
+      admin,
+      event.data.object as Stripe.Checkout.Session,
+      stripeSecret.length > 0,
+    );
   }
 
-  const session = event.data.object as Stripe.Checkout.Session;
-  const userId = parseUserId(session);
-  if (!userId) {
-    console.warn(
-      "stripe-webhook: checkout.session.completed missing supabase_user_id / client_reference_id (uuid).",
+  if (event.type === "customer.subscription.updated") {
+    return await handleSubscriptionUpdated(
+      admin,
+      event.data.object as Stripe.Subscription,
     );
+  }
+
+  return jsonResponse({ received: true, ignored: event.type }, 200);
+});
+
+async function handleCheckoutCompleted(
+  stripe: Stripe,
+  admin: ReturnType<typeof createClient>,
+  session: Stripe.Checkout.Session,
+  canRetrieveSubscription: boolean,
+): Promise<Response> {
+  const userId = parseUserIdFromSession(session);
+  if (!userId) {
     return jsonResponse(
       {
         error:
@@ -118,53 +139,120 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  const tier = session.metadata?.tier?.trim() || "pro";
-  const totalQuotaRaw = session.metadata?.total_quota?.trim();
-  const totalQuota = totalQuotaRaw
-    ? Math.max(0, parseInt(totalQuotaRaw, 10) || 0)
-    : tier === "pro"
-    ? 500_000
-    : 150_000;
+  const tier = normalizeTier(session.metadata?.tier);
+  const customQuota = session.metadata?.total_quota?.trim();
+  const totalQuota = customQuota
+    ? Math.max(0, parseInt(customQuota, 10) || 0)
+    : TIER_QUOTAS[tier];
 
-  const entitlements = buildEntitlements(session);
+  let nextRefill: string | null = null;
+  const subRef = session.subscription;
+  const subId = typeof subRef === "string" ? subRef : subRef?.id;
+  if (subId && canRetrieveSubscription) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(subId);
+      nextRefill = new Date(sub.current_period_end * 1000).toISOString();
+    } catch (e) {
+      console.warn("stripe subscription retrieve failed:", e);
+    }
+  }
 
-  const admin = createClient(supabaseUrl, serviceKey);
+  const { data: row } = await admin
+    .from("user_quotas")
+    .select("entitlements")
+    .eq("id", userId)
+    .maybeSingle();
 
-  const { data: existing, error: selErr } = await admin
+  const prevEnt = (row?.entitlements ?? {}) as Record<string, unknown>;
+  if (prevEnt["last_checkout_session_id"] === session.id) {
+    return jsonResponse({ ok: true, duplicate: true, user_id: userId }, 200);
+  }
+
+  const entitlements: Record<string, unknown> = {
+    ...prevEnt,
+    stripe_checkout: true,
+    checkout_session_id: session.id,
+    last_checkout_session_id: session.id,
+    subscription_id: subId ?? null,
+  };
+
+  const patch = {
+    tier,
+    total_quota: totalQuota,
+    tokens_used: 0,
+    entitlements,
+    next_token_refill_at: nextRefill,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: existing } = await admin
     .from("user_quotas")
     .select("id")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await admin.from("user_quotas").update(patch).eq("id", userId);
+    if (error) return jsonResponse({ error: error.message }, 500);
+  } else {
+    const { error } = await admin.from("user_quotas").insert({
+      id: userId,
+      ...patch,
+    });
+    if (error) return jsonResponse({ error: error.message }, 500);
+  }
+
+  return jsonResponse(
+    { ok: true, user_id: userId, tier, total_quota: totalQuota },
+    200,
+  );
+}
+
+async function handleSubscriptionUpdated(
+  admin: ReturnType<typeof createClient>,
+  sub: Stripe.Subscription,
+): Promise<Response> {
+  const userId = parseUserIdFromSubscription(sub);
+  if (!userId) {
+    return jsonResponse({ received: true, ignored: "no supabase_user_id on subscription" }, 200);
+  }
+
+  const nextRefill = new Date(sub.current_period_end * 1000).toISOString();
+
+  const { data: row, error: selErr } = await admin
+    .from("user_quotas")
+    .select("entitlements")
     .eq("id", userId)
     .maybeSingle();
 
   if (selErr) {
     return jsonResponse({ error: selErr.message }, 500);
   }
-
-  if (existing) {
-    const { error: upErr } = await admin
-      .from("user_quotas")
-      .update({
-        tier,
-        total_quota: totalQuota,
-        entitlements,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", userId);
-    if (upErr) {
-      return jsonResponse({ error: upErr.message }, 500);
-    }
-  } else {
-    const { error: insErr } = await admin.from("user_quotas").insert({
-      id: userId,
-      tokens_used: 0,
-      total_quota: totalQuota,
-      tier,
-      entitlements,
-    });
-    if (insErr) {
-      return jsonResponse({ error: insErr.message }, 500);
-    }
+  if (!row) {
+    return jsonResponse({ received: true, ignored: "no user_quotas row" }, 200);
   }
 
-  return jsonResponse({ ok: true, user_id: userId, tier }, 200);
-});
+  const prev = (row.entitlements ?? {}) as Record<string, unknown>;
+  const entitlements = {
+    ...prev,
+    stripe_subscription_id: sub.id,
+    subscription_status: sub.status,
+    current_period_end: nextRefill,
+  };
+
+  const { error } = await admin
+    .from("user_quotas")
+    .update({
+      tokens_used: 0,
+      next_token_refill_at: nextRefill,
+      updated_at: new Date().toISOString(),
+      entitlements,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    return jsonResponse({ error: error.message }, 500);
+  }
+
+  return jsonResponse({ ok: true, user_id: userId, refill: true }, 200);
+}

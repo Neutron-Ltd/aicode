@@ -40,15 +40,14 @@ export class EditorService {
       return false;
     }
 
-    const { selection } = editor;
-
-    return editor.edit((editBuilder) => {
-      if (!selection.isEmpty) {
-        editBuilder.replace(selection, code);
-      } else {
-        editBuilder.insert(selection.active, code);
-      }
-    });
+    const { selection, document } = editor;
+    const edit = new vscode.WorkspaceEdit();
+    if (!selection.isEmpty) {
+      edit.replace(document.uri, selection, code);
+    } else {
+      edit.insert(document.uri, selection.active, code);
+    }
+    return vscode.workspace.applyEdit(edit);
   }
 
   /**

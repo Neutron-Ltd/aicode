@@ -7,3 +7,7 @@ verify_jwt = false
 # Stripe calls this endpoint with Stripe-Signature, not Supabase JWT.
 [functions.stripe-webhook]
 verify_jwt = false
+
+# JWT is validated inside the function (Bearer from the extension).
+[functions.embed]
+verify_jwt = false

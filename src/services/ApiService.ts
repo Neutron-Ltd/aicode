@@ -1,8 +1,22 @@
 import * as vscode from "vscode";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
+import type { ChatPayload } from "../types/chatPayload";
 import type { HostToWebviewMessage } from "../shared/messages";
 import type { AuthService } from "./AuthService";
 import type { PromptBuilderService } from "./PromptBuilderService";
+import type { ToolCallWire, ToolExecutionService } from "./ToolExecutionService";
+
+const MAX_TOOL_ROUNDS = 8;
+
+type SseJson = {
+  delta?: string;
+  error?: string;
+  tool_calls?: ToolCallWire[];
+  remaining_tokens?: number;
+  usage_total_tokens?: number;
+};
+
+type Conv = NonNullable<ChatPayload["conversationOverride"]>;
 
 /**
  * Calls the Supabase `chat` Edge Function with the user JWT and streams SSE deltas
@@ -13,7 +27,7 @@ import type { PromptBuilderService } from "./PromptBuilderService";
  * **Response (SSE):** `Content-Type: text/event-stream`. Each event line:
  * `data: {"delta":"..."}\n\n` — append `delta` to the assistant message. Optional terminal
  * event: `data: [DONE]\n\n`. Lines may include `{ "error": "..." }` to signal failure.
- * Non-SSE JSON responses fall back to `{ content: string }` or raw text.
+ * Tool rounds emit `data: {"tool_calls":[...]}\n\n` before `[DONE]`.
  *
  * Upstream API keys stay **only** in the Edge Function env — never in the extension.
  */
@@ -21,6 +35,7 @@ export class ApiService {
   constructor(
     private readonly auth: AuthService,
     private readonly promptBuilder: PromptBuilderService,
+    private readonly tools: ToolExecutionService,
     private readonly postToWebview: (msg: HostToWebviewMessage) => void
   ) {}
 
@@ -50,57 +65,106 @@ export class ApiService {
       return;
     }
 
-    let payload;
-    try {
-      payload = await this.promptBuilder.buildChatPayload(query, modelId);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      this.postChatError(message);
-      return;
-    }
-
     const assistantId = `a-${Date.now()}`;
     this.postToWebview({
       type: "CHAT_STREAM_START",
       payload: { id: assistantId },
     });
 
-    const chatUrl = `${url.replace(/\/$/, "")}/functions/v1/chat`;
-
     try {
-      const response = await fetch(chatUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          apikey: anonKey,
-          "Content-Type": "application/json",
-          Accept: "text/event-stream, application/json",
-        },
-        body: JSON.stringify(payload),
+      let base = await this.promptBuilder.buildChatPayload(query, modelId);
+      const chatUrl = `${url.replace(/\/$/, "")}/functions/v1/chat`;
+      let conversationOverride: Conv | undefined;
+
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const payload: ChatPayload = conversationOverride?.length
+          ? {
+              ...base,
+              query: "",
+              conversationOverride,
+            }
+          : base;
+
+        const response = await fetch(chatUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: anonKey,
+            "Content-Type": "application/json",
+            Accept: "text/event-stream, application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (response.status === 429) {
+          const errText = await response.text().catch(() => response.statusText);
+          const message = `Rate limited: ${errText.slice(0, 400)}`;
+          this.postChatError(message);
+          void vscode.window.showWarningMessage(`Build Ultra: ${message}`);
+          break;
+        }
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => response.statusText);
+          const message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
+          this.postChatError(message);
+          void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
+          break;
+        }
+
+        const contentType = response.headers.get("content-type") ?? "";
+        let toolCalls: ToolCallWire[] = [];
+        let assistantText = "";
+        if (contentType.includes("text/event-stream")) {
+          const r = await this.streamSse(response, assistantId);
+          toolCalls = r.toolCalls;
+          assistantText = r.assistantText;
+        } else {
+          await this.handleNonStreamBody(response, assistantId);
+        }
+
+        if (toolCalls.length === 0) {
+          break;
+        }
+
+        base = await this.promptBuilder.refreshPayloadForToolRound(modelId, query);
+        const ctxBundle = this.promptBuilder.buildToolFollowupContextBundle(base);
+        const userQuery = query.trim();
+
+        const expectedVersions = new Map<string, number>();
+        const assistantMsg: Conv[number] = {
+          role: "assistant",
+          content: assistantText.trim() ? assistantText : null,
+          tool_calls: toolCalls,
+        };
+
+        const toolMsgs: Conv = [];
+        for (const tc of toolCalls) {
+          const result = await this.tools.executeOne(tc, expectedVersions);
+          toolMsgs.push({
+            role: "tool",
+            content: result.content,
+            tool_call_id: result.tool_call_id,
+            name: result.name,
+          });
+        }
+
+        if (!conversationOverride?.length) {
+          conversationOverride = [
+            { role: "user", content: ctxBundle },
+            { role: "user", content: userQuery },
+            assistantMsg,
+            ...toolMsgs,
+          ];
+        } else {
+          conversationOverride = [...conversationOverride, assistantMsg, ...toolMsgs];
+        }
+      }
+
+      this.postToWebview({
+        type: "CHAT_STREAM_END",
+        payload: { id: assistantId },
       });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => response.statusText);
-        const message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
-        this.postChatError(message);
-        void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
-        return;
-      }
-
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("text/event-stream")) {
-        await this.streamSse(response, assistantId);
-        this.postToWebview({
-          type: "CHAT_STREAM_END",
-          payload: { id: assistantId },
-        });
-      } else {
-        await this.handleNonStreamBody(response, assistantId);
-        this.postToWebview({
-          type: "CHAT_STREAM_END",
-          payload: { id: assistantId },
-        });
-      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       this.postChatError(message);
@@ -115,7 +179,7 @@ export class ApiService {
   private async streamSse(
     response: Response,
     assistantId: string
-  ): Promise<void> {
+  ): Promise<{ toolCalls: ToolCallWire[]; assistantText: string }> {
     const body = response.body;
     if (!body) {
       throw new Error("Empty response body from chat function.");
@@ -123,6 +187,8 @@ export class ApiService {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let lastToolCalls: ToolCallWire[] = [];
+    let assistantText = "";
 
     try {
       while (true) {
@@ -135,41 +201,43 @@ export class ApiService {
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
         for (const line of lines) {
-          this.processSseLine(line, assistantId);
+          const r = this.processSseLine(line, assistantId);
+          if (r.toolCalls.length) lastToolCalls = r.toolCalls;
+          assistantText += r.deltaChunk;
         }
       }
       if (buffer.trim()) {
         for (const line of buffer.split("\n")) {
-          this.processSseLine(line, assistantId);
+          const r = this.processSseLine(line, assistantId);
+          if (r.toolCalls.length) lastToolCalls = r.toolCalls;
+          assistantText += r.deltaChunk;
         }
       }
     } finally {
       reader.releaseLock();
     }
+    return { toolCalls: lastToolCalls, assistantText };
   }
 
-  private processSseLine(line: string, assistantId: string): void {
+  private processSseLine(
+    line: string,
+    assistantId: string
+  ): { toolCalls: ToolCallWire[]; deltaChunk: string } {
     const trimmed = line.trimEnd();
     if (!trimmed.startsWith("data:")) {
-      return;
+      return { toolCalls: [], deltaChunk: "" };
     }
     const data = trimmed.slice(5).trimStart();
     if (data === "[DONE]" || data === "") {
-      return;
+      return { toolCalls: [], deltaChunk: "" };
     }
     try {
-      const parsed = JSON.parse(data) as {
-        delta?: string;
-        error?: string;
-        remaining_tokens?: number;
-        usage_total_tokens?: number;
-      };
+      const parsed = JSON.parse(data) as SseJson;
       if (typeof parsed.error === "string" && parsed.error.length > 0) {
         throw new Error(parsed.error);
       }
-      // Server-side accounting only — never forward as chat text.
       if (typeof parsed.usage_total_tokens === "number") {
-        return;
+        return { toolCalls: [], deltaChunk: "" };
       }
       if (typeof parsed.remaining_tokens === "number") {
         this.postToWebview({
@@ -177,25 +245,33 @@ export class ApiService {
           payload: { remaining: parsed.remaining_tokens },
         });
       }
+      if (Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0) {
+        return {
+          toolCalls: parsed.tool_calls as ToolCallWire[],
+          deltaChunk: "",
+        };
+      }
       if (typeof parsed.delta === "string" && parsed.delta.length > 0) {
         this.postToWebview({
           type: "CHAT_STREAM_DELTA",
           payload: { id: assistantId, delta: parsed.delta },
         });
+        return { toolCalls: [], deltaChunk: parsed.delta };
       }
+      return { toolCalls: [], deltaChunk: "" };
     } catch (e) {
       if (e instanceof SyntaxError) {
         const t = data.trim();
         if (t.startsWith("{") || t.startsWith("[")) {
-          return;
+          return { toolCalls: [], deltaChunk: "" };
         }
         this.postToWebview({
           type: "CHAT_STREAM_DELTA",
           payload: { id: assistantId, delta: data },
         });
-      } else {
-        throw e;
+        return { toolCalls: [], deltaChunk: data };
       }
+      throw e;
     }
   }
 

@@ -1,9 +1,8 @@
 /**
  * Build Ultra — ship-time configuration.
- * Replace placeholder values with your Supabase project URL and anon key before release.
+ * Supabase URL and anon key are injected at compile time from `.env` via `scripts/gen-config.mjs`.
  */
-export const SUPABASE_URL = "https://wygqbnqtxpuyzeummdmf.supabase.co";
-export const SUPABASE_ANON_KEY = "sb_publishable_v7zqqOe-6oydZsHb-y8FYg_ga-cWmS7";
+export { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.generated";
 
 /** OAuth provider id when using `signInWithOAuth` (e.g. github, google). */
 export const ULTRA_OAUTH_PROVIDER = "github";

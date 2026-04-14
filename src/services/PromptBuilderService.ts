@@ -3,8 +3,12 @@ import type { ChatPayload } from "../types/chatPayload";
 import type { EditorService } from "./EditorService";
 import type { TerminalService } from "./TerminalService";
 
+/** Matches Edge `buildContextUserMessage` — RAG omitted on tool follow-ups. */
+const RAG_OMITTED_NOTE =
+  "(Indexed codebase omitted on tool follow-up; refer to the first request context.)";
+
 /**
- * `.ultrarules` and chat payload envelope (Chunk 5).
+ * `.ultrarules` and chat payload envelope: strict separation of rules, context, and user query.
  */
 export class PromptBuilderService {
   constructor(
@@ -31,19 +35,48 @@ export class PromptBuilderService {
   }
 
   /**
-   * Builds the structured payload for a chat request (used by ApiService in Chunk 6).
+   * Problems / diagnostics for the active editor file (compact text for the Edge prompt).
+   */
+  async getDiagnosticsSummaryForActiveFile(): Promise<string> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return "";
+    }
+    const diags = vscode.languages.getDiagnostics(editor.document.uri);
+    if (diags.length === 0) {
+      return "";
+    }
+    const lines: string[] = [];
+    for (const d of diags.slice(0, 40)) {
+      const start = d.range.start;
+      const loc = `${start.line + 1}:${start.character + 1}`;
+      const sev =
+        d.severity === vscode.DiagnosticSeverity.Error
+          ? "error"
+          : d.severity === vscode.DiagnosticSeverity.Warning
+            ? "warning"
+            : "info";
+      lines.push(`- [${sev}] ${loc} ${d.message.replace(/\s+/g, " ").trim()}`);
+    }
+    if (diags.length > 40) {
+      lines.push(`- … and ${diags.length - 40} more diagnostic(s).`);
+    }
+    return lines.join("\n");
+  }
+
+  /**
+   * Builds the structured payload for a chat request (used by ApiService).
    */
   async buildChatPayload(query: string, modelId: string): Promise<ChatPayload> {
     const workspaceRules = await this.loadWorkspaceRules();
-
-    // TODO: Inject RAG vector context here.
-
+    const diagnosticsSummary = await this.getDiagnosticsSummaryForActiveFile();
     const terminalContext = this.terminal.getRecentTerminalContext();
 
     const payload: ChatPayload = {
       query,
       modelId,
       workspaceRules,
+      diagnosticsSummary,
       terminalContext,
       editorContext: {
         fileName: this.editor.getActiveFileName(),
@@ -53,5 +86,49 @@ export class PromptBuilderService {
     };
 
     return payload;
+  }
+
+  /**
+   * Structured context block for `conversationOverride` (must stay aligned with Edge `buildContextUserMessage`).
+   */
+  buildToolFollowupContextBundle(payload: ChatPayload): string {
+    const { workspaceRules, editorContext, terminalContext, diagnosticsSummary } = payload;
+    const { fileName, fullFileText, selectedText } = editorContext;
+    const rulesBlock = (workspaceRules ?? "").trim()
+      ? `## Workspace rules (.ultrarules)\n${workspaceRules.trim()}`
+      : "(No workspace rules file.)";
+    const diag = (diagnosticsSummary ?? "").trim()
+      ? `## Diagnostics (active file)\n${diagnosticsSummary.trim()}`
+      : "(No diagnostics for the active file.)";
+    return [
+      "## Context bundle (not the user question)",
+      "",
+      rulesBlock,
+      "",
+      diag,
+      "",
+      "## Indexed codebase (RAG)",
+      RAG_OMITTED_NOTE,
+      "",
+      "## Editor",
+      `- Active file: ${fileName ?? "(none)"}`,
+      "### Selection",
+      selectedText?.trim() ? selectedText : "(empty)",
+      "",
+      "### Active file text",
+      "```text",
+      fullFileText ?? "",
+      "```",
+      "",
+      "## Terminal",
+      terminalContext?.combinedText?.trim()
+        ? terminalContext.combinedText
+        : "(no terminal output)",
+    ].join("\n");
+  }
+
+  /** Refreshes editor/diagnostics/rules for follow-up rounds. */
+  async refreshPayloadForToolRound(modelId: string, query: string): Promise<ChatPayload> {
+    return this.buildChatPayload(query, modelId);
   }
 }

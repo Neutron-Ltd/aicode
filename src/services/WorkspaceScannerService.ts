@@ -116,7 +116,9 @@ export class WorkspaceScannerService {
       let files = 0;
 
       for (const folder of folders) {
-        const ignore = await this.loadGitignorePatterns(folder.uri);
+        const gitIgn = await this.loadGitignorePatterns(folder.uri);
+        const ultraIgn = await this.loadBuildUltraIgnorePatterns(folder.uri);
+        const ignore = [...gitIgn, ...ultraIgn];
         const filesInFolder = await this.collectFiles(folder.uri, ignore);
         files += filesInFolder.length;
         for (const file of filesInFolder) {
@@ -204,6 +206,21 @@ export class WorkspaceScannerService {
     const ignoreUri = vscode.Uri.joinPath(root, ".gitignore");
     try {
       const bytes = await vscode.workspace.fs.readFile(ignoreUri);
+      const text = new TextDecoder("utf-8").decode(bytes);
+      return text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#"));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Extra ignore patterns (same line format as `.gitignore`) for indexing only. */
+  private async loadBuildUltraIgnorePatterns(root: vscode.Uri): Promise<string[]> {
+    const uri = vscode.Uri.joinPath(root, ".buildultraignore");
+    try {
+      const bytes = await vscode.workspace.fs.readFile(uri);
       const text = new TextDecoder("utf-8").decode(bytes);
       return text
         .split(/\r?\n/)

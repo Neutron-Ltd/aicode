@@ -115,7 +115,16 @@ export function MessageList({
           );
         }
         return (
-          <div key={m.id} className="min-w-0 pr-2">
+          <div key={m.id} className="flex min-w-0 flex-col gap-1 pr-2">
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider"
+              style={{
+                color:
+                  "color-mix(in srgb, rgb(196 181 253) 80%, var(--vscode-descriptionForeground))",
+              }}
+            >
+              Ultra AI
+            </span>
             <MarkdownMessage content={m.content} onApplyCode={onApplyCode} variant="flush" />
           </div>
         );

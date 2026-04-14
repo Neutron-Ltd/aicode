@@ -15,12 +15,22 @@
  * Equivalent local pattern: `import { serve } from "https://deno.land/std@0.168.0/http/server.ts"`
  * then `serve(handler, { port: Number(Deno.env.get("PORT") ?? "8000") })`.
  */
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const EMBEDDING_MODEL = "text-embedding-3-small";
 
 /** Avoid sending huge files on every request (tune as needed). */
 const MAX_EDITOR_FILE_CHARS = 120_000;
+
+/** Rough context budget (characters) before upstream call — RAG truncated first, then file. */
+const MAX_CONTEXT_CHARS = 100_000;
+
+/** Approximate tokens from UTF-16 length (fast; aligns with PRD token window step). */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+const RATE_LIMIT_PER_MINUTE = 60;
 
 /** OpenAI-compatible `/v1/chat/completions` body uses this temperature. */
 const CHAT_TEMPERATURE = 0.7;
@@ -72,24 +82,55 @@ function buildUpstreamChatRequestBody(
     stream: true,
     temperature: CHAT_TEMPERATURE,
     stream_options: { include_usage: true },
+    tools: OPENAI_TOOLS,
+    tool_choice: "auto",
   };
 }
 
-/** Ensures non-empty, valid roles and string content for the upstream API. */
-function sanitizeChatMessages(
-  messages: OpenAIChatMessage[],
-): Array<{ role: "system" | "user" | "assistant"; content: string }> {
-  const allowed = new Set<string>(["system", "user", "assistant"]);
-  const out: Array<{ role: "system" | "user" | "assistant"; content: string }> =
-    [];
+/** Normalizes messages for the upstream API (supports tool follow-ups). */
+function sanitizeChatMessages(messages: OpenAIChatMessage[]): OpenAIChatMessage[] {
+  const out: OpenAIChatMessage[] = [];
   for (const m of messages) {
     if (!m || typeof m !== "object") continue;
     const role = m.role;
-    if (!allowed.has(role)) continue;
-    let content = typeof m.content === "string" ? m.content : "";
-    if (content.length === 0) content = " ";
-    out.push({ role: role as "system" | "user" | "assistant", content });
+    if (typeof role !== "string") continue;
+
+    if (role === "tool") {
+      const content = typeof m.content === "string" ? m.content : " ";
+      const tool_call_id = typeof m.tool_call_id === "string"
+        ? m.tool_call_id
+        : "";
+      const entry: OpenAIChatMessage = {
+        role: "tool",
+        content: content.length ? content : " ",
+        tool_call_id,
+      };
+      if (typeof m.name === "string") entry.name = m.name;
+      out.push(entry);
+      continue;
+    }
+
+    if (
+      role !== "system" && role !== "user" && role !== "assistant"
+    ) {
+      continue;
+    }
+
+    const hasTools = Boolean(m.tool_calls);
+    let content: string | null = typeof m.content === "string" ? m.content : null;
+    if (role === "assistant" && hasTools && (content === null || content === "")) {
+      const entry: OpenAIChatMessage = { role, content: null };
+      entry.tool_calls = m.tool_calls;
+      out.push(entry);
+      continue;
+    }
+    const c = content ?? "";
+    const entry: OpenAIChatMessage = { role, content: c.length ? c : " " };
+    if (m.tool_calls) entry.tool_calls = m.tool_calls;
+    if (typeof m.name === "string") entry.name = m.name;
+    out.push(entry);
   }
+
   if (out.length === 0) {
     return [{ role: "user", content: " " }];
   }
@@ -119,6 +160,7 @@ interface ChatPayload {
   query: string;
   modelId: string;
   workspaceRules: string;
+  diagnosticsSummary?: string;
   terminalContext?: {
     recentLines?: string[];
     combinedText?: string;
@@ -128,65 +170,274 @@ interface ChatPayload {
     fullFileText: string;
     selectedText: string;
   };
+  conversationOverride?: Array<{
+    role: "system" | "user" | "assistant" | "tool";
+    content: string | null;
+    name?: string;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+  }>;
 }
 
-interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+type OpenAIChatMessage = Record<string, unknown>;
+
+const OPENAI_TOOLS: unknown[] = [
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read UTF-8 text from a workspace file.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Relative path from workspace root" },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Replace file contents or a line range. Use range for small edits; omit range only when replacing the whole file with user consent.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+          range: {
+            type: "object",
+            properties: {
+              startLine: { type: "integer", description: "1-based inclusive" },
+              endLine: { type: "integer", description: "1-based inclusive" },
+            },
+            required: ["startLine", "endLine"],
+          },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_file",
+      description: "Create a new file with the given content.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_directory",
+      description: "List non-hidden entries in a directory under the workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Relative directory path" },
+        },
+        required: ["path"],
+      },
+    },
+  },
+];
+
+async function enforceRateLimit(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<boolean> {
+  const minuteKey = new Date(
+    Math.floor(Date.now() / 60_000) * 60_000,
+  ).toISOString();
+  const { data: row, error: selErr } = await admin
+    .from("chat_rate_counters")
+    .select("minute_bucket, request_count")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (selErr) {
+    console.warn("rate limit select:", selErr.message);
+    return true;
+  }
+  if (!row) {
+    const { error } = await admin.from("chat_rate_counters").insert({
+      user_id: userId,
+      minute_bucket: minuteKey,
+      request_count: 1,
+    });
+    if (error) console.warn("rate limit insert:", error.message);
+    return true;
+  }
+  const bucket = row.minute_bucket as string;
+  const count = typeof row.request_count === "number" ? row.request_count : 0;
+  if (bucket !== minuteKey) {
+    await admin
+      .from("chat_rate_counters")
+      .update({
+        minute_bucket: minuteKey,
+        request_count: 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", userId);
+    return true;
+  }
+  if (count >= RATE_LIMIT_PER_MINUTE) {
+    return false;
+  }
+  await admin
+    .from("chat_rate_counters")
+    .update({
+      request_count: count + 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+  return true;
+}
+
+async function fetchMasterSystemPrompt(
+  dbClient: SupabaseClient,
+): Promise<string> {
+  const { data, error } = await dbClient
+    .from("master_prompts")
+    .select("content")
+    .eq("name", "default")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn("master_prompts:", error.message);
+  }
+  if (data && typeof (data as { content?: string }).content === "string") {
+    return (data as { content: string }).content;
+  }
+  return "You are Ultra AI, a coding assistant for Build Ultra in VS Code.";
 }
 
 /**
- * Turn workspace rules + editor snapshot + user query into OpenAI-style messages.
+ * Truncate RAG block first, then active file, to stay under approximate token budget.
  */
-function buildOpenAIMessages(
-  payload: ChatPayload,
-  codebaseContext: string
-): OpenAIChatMessage[] {
-  const { query, workspaceRules, editorContext, terminalContext } = payload;
-  const { fileName, fullFileText, selectedText } = editorContext;
-
-  let fileBody = fullFileText ?? "";
-  if (fileBody.length > MAX_EDITOR_FILE_CHARS) {
-    fileBody =
-      fileBody.slice(0, MAX_EDITOR_FILE_CHARS) +
-      "\n\n[... file truncated for context length ...]";
+function truncateContextParts(
+  codebaseContext: string,
+  fileBody: string,
+  maxChars: number,
+): { rag: string; file: string } {
+  let rag = codebaseContext.trim();
+  let file = fileBody;
+  let total = rag.length + file.length;
+  if (total <= maxChars) {
+    return { rag, file };
   }
+  const over = total - maxChars;
+  if (rag.length >= over) {
+    rag = rag.slice(0, Math.max(0, rag.length - over)) +
+      "\n\n[… RAG context truncated for token budget …]";
+    return { rag, file };
+  }
+  const remain = over - rag.length;
+  rag = rag.slice(0, Math.max(0, rag.length - Math.floor(rag.length * 0.5))) +
+    "\n\n[… RAG truncated …]";
+  file = file.slice(0, Math.max(0, file.length - remain)) +
+    "\n\n[… active file truncated for token budget …]";
+  return { rag, file };
+}
 
+function buildContextUserMessage(payload: ChatPayload, rag: string, fileBody: string): string {
+  const { workspaceRules, editorContext, terminalContext, diagnosticsSummary } = payload;
+  const { fileName, selectedText } = editorContext;
   const rulesBlock = (workspaceRules ?? "").trim()
     ? `## Workspace rules (.ultrarules)\n${workspaceRules.trim()}`
-    : "(No workspace rules file was provided.)";
-
-  const systemContent = [
-    "You are Ultra AI, the coding assistant for Build Ultra inside VS Code.",
-    "Follow the workspace rules when relevant. Use markdown in replies.",
-    "When proposing code changes, always give the full, corrected fenced code block so the user can apply it in one click.",
-    "Do not use minimal snippets or partial diffs unless the user explicitly asks for a small, localized change.",
+    : "(No workspace rules file.)";
+  const diag = (diagnosticsSummary ?? "").trim()
+    ? `## Diagnostics (active file)\n${diagnosticsSummary.trim()}`
+    : "(No diagnostics for the active file.)";
+  return [
+    "## Context bundle (not the user question)",
     "",
     rulesBlock,
     "",
-    "## Current editor context",
-    `- Active file: ${fileName ?? "(none)"}`,
+    diag,
     "",
-    "### User selection (highlighted text)",
+    "## Indexed codebase (RAG)",
+    rag.trim() ? rag : "(no relevant chunks)",
+    "",
+    "## Editor",
+    `- Active file: ${fileName ?? "(none)"}`,
+    "### Selection",
     selectedText?.trim() ? selectedText : "(empty)",
     "",
-    "### Full active file",
+    "### Active file text",
     "```text",
     fileBody,
     "```",
     "",
-    "## Recent terminal context",
+    "## Terminal",
     terminalContext?.combinedText?.trim()
       ? terminalContext.combinedText
-      : "(no terminal output captured)",
-    "",
-    "## Codebase Context",
-    codebaseContext.trim() ? codebaseContext : "(no relevant indexed chunks found)",
+      : "(no terminal output)",
   ].join("\n");
+}
+
+function assembleChatMessages(
+  masterSystem: string,
+  payload: ChatPayload,
+  codebaseContext: string,
+): OpenAIChatMessage[] {
+  if (payload.conversationOverride?.length) {
+    return [
+      { role: "system", content: masterSystem },
+      ...payload.conversationOverride.map((m) => {
+        const o: OpenAIChatMessage = { role: m.role };
+        if (m.role === "tool") {
+          o.content = typeof m.content === "string" && m.content.length ? m.content : " ";
+          if (m.tool_call_id) o.tool_call_id = m.tool_call_id;
+          if (m.name) o.name = m.name;
+          return o;
+        }
+        if (m.tool_calls) {
+          o.tool_calls = m.tool_calls;
+          if (m.content === null || m.content === undefined) {
+            o.content = null;
+          } else {
+            o.content = m.content;
+          }
+        } else {
+          o.content = m.content ?? "";
+        }
+        if (m.name) o.name = m.name;
+        return o;
+      }),
+    ];
+  }
+
+  let fileBody = payload.editorContext.fullFileText ?? "";
+  if (fileBody.length > MAX_EDITOR_FILE_CHARS) {
+    fileBody =
+      fileBody.slice(0, MAX_EDITOR_FILE_CHARS) +
+      "\n\n[... file truncated ...]";
+  }
+  const { rag, file } = truncateContextParts(
+    codebaseContext,
+    fileBody,
+    MAX_CONTEXT_CHARS,
+  );
+  const contextPack = buildContextUserMessage(
+    { ...payload, editorContext: { ...payload.editorContext, fullFileText: file } },
+    rag,
+    file,
+  );
 
   return [
-    { role: "system", content: systemContent },
-    { role: "user", content: query },
+    { role: "system", content: masterSystem },
+    { role: "user", content: contextPack },
+    { role: "user", content: payload.query.trim() },
   ];
 }
 
@@ -253,6 +504,54 @@ function extractAssistantDeltaText(chunk: unknown): string | null {
   return null;
 }
 
+type ToolCallAcc = Map<
+  number,
+  { id?: string; name?: string; arguments: string }
+>;
+
+function accumulateToolCallsFromChunk(chunk: unknown, acc: ToolCallAcc): void {
+  if (chunk == null || typeof chunk !== "object") return;
+  const c = chunk as {
+    choices?: Array<{
+      delta?: {
+        tool_calls?: Array<{
+          index?: number;
+          id?: string;
+          function?: { name?: string; arguments?: string };
+        }>;
+      };
+    }>;
+  };
+  const tcs = c?.choices?.[0]?.delta?.tool_calls;
+  if (!tcs) return;
+  for (const tc of tcs) {
+    const idx = tc.index ?? 0;
+    let cur = acc.get(idx);
+    if (!cur) {
+      cur = { arguments: "" };
+      acc.set(idx, cur);
+    }
+    if (tc.id) cur.id = tc.id;
+    if (tc.function?.name) cur.name = tc.function.name;
+    if (tc.function?.arguments) cur.arguments += tc.function.arguments;
+  }
+}
+
+function finalizeToolCalls(acc: ToolCallAcc): unknown[] {
+  const out: unknown[] = [];
+  const keys = [...acc.keys()].sort((a, b) => a - b);
+  for (const k of keys) {
+    const v = acc.get(k);
+    if (!v?.id || !v.name) continue;
+    out.push({
+      id: v.id,
+      type: "function",
+      function: { name: v.name, arguments: v.arguments },
+    });
+  }
+  return out;
+}
+
 /** Prefer explicit name, then shared secret. */
 function resolveUpstreamApiKey(): string | null {
   const a = Deno.env.get("THREETW_AI_API_KEY")?.trim();
@@ -267,6 +566,7 @@ function resolveUpstreamApiKey(): string | null {
  */
 async function* transformUpstreamStreamToUltraSSE(
   upstreamBody: ReadableStream<Uint8Array>,
+  toolAcc: ToolCallAcc,
 ): AsyncGenerator<Uint8Array> {
   const reader = upstreamBody.getReader();
   const decoder = new TextDecoder();
@@ -309,6 +609,8 @@ async function* transformUpstreamStreamToUltraSSE(
           continue;
         }
 
+        accumulateToolCallsFromChunk(chunk, toolAcc);
+
         const usageTokens = getUsageTotalTokens(
           chunk as { choices?: unknown; usage?: { total_tokens?: number } },
         );
@@ -341,6 +643,7 @@ async function* transformUpstreamStreamToUltraSSE(
             chunk = undefined;
           }
           if (chunk !== undefined) {
+            accumulateToolCallsFromChunk(chunk, toolAcc);
             const usageTokens = getUsageTotalTokens(
               chunk as { choices?: unknown; usage?: { total_tokens?: number } },
             );
@@ -358,6 +661,13 @@ async function* transformUpstreamStreamToUltraSSE(
           }
         }
       }
+    }
+
+    const finalized = finalizeToolCalls(toolAcc);
+    if (finalized.length > 0) {
+      yield encoder.encode(
+        `data: ${JSON.stringify({ tool_calls: finalized })}\n\n`,
+      );
     }
   } finally {
     reader.releaseLock();
@@ -412,6 +722,18 @@ async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: "Unauthorized" }, 401);
   }
 
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
+  if (serviceRoleKey) {
+    const rateAdmin = createClient(supabaseUrl, serviceRoleKey);
+    const allowed = await enforceRateLimit(rateAdmin, user.id);
+    if (!allowed) {
+      return jsonResponse(
+        { error: "Rate limit exceeded. Try again in about a minute." },
+        429,
+      );
+    }
+  }
+
   // Use user JWT for RLS-aware reads/writes in Postgres.
   const dbClient = createClient(supabaseUrl, supabaseAnonKey, {
     global: {
@@ -428,14 +750,23 @@ async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
 
-  if (typeof payload.query !== "string" || !payload.query.trim()) {
+  const hasOverride = Boolean(
+    payload.conversationOverride && payload.conversationOverride.length > 0,
+  );
+  if (
+    !hasOverride &&
+    (typeof payload.query !== "string" || !payload.query.trim())
+  ) {
     return jsonResponse({ error: "Missing query" }, 400);
   }
 
   const uiModelId = typeof payload.modelId === "string" ? payload.modelId : "";
   const upstreamModel = resolveUpstreamModel(uiModelId);
 
-  if (!payload.editorContext || typeof payload.editorContext !== "object") {
+  if (
+    !hasOverride &&
+    (!payload.editorContext || typeof payload.editorContext !== "object")
+  ) {
     return jsonResponse({ error: "Missing editorContext" }, 400);
   }
 
@@ -473,50 +804,58 @@ async function handler(req: Request): Promise<Response> {
     );
   }
 
+  const masterSystem = await fetchMasterSystemPrompt(dbClient);
+
   let codebaseContext = "";
-  try {
-    const queryEmbedding = await embedText(
-      apiKey,
-      upstreamEmbeddingsUrl,
-      payload.query,
-    );
-    const { data: matches, error: matchErr } = await dbClient.rpc(
-      "match_documents",
-      {
-        query_embedding: queryEmbedding,
-        match_threshold: 0.65,
-        match_count: 5,
+  if (!hasOverride) {
+    try {
+      const queryEmbedding = await embedText(
+        apiKey,
+        upstreamEmbeddingsUrl,
+        payload.query,
+      );
+      const { data: matches, error: matchErr } = await dbClient.rpc(
+        "match_documents",
+        {
+          query_embedding: queryEmbedding,
+          match_threshold: 0.65,
+          match_count: 5,
+        },
+      );
+      if (matchErr) {
+        console.warn("match_documents failed:", matchErr.message);
+      } else if (Array.isArray(matches) && matches.length > 0) {
+        codebaseContext = matches
+          .map((m: { file_path?: string; content?: string; similarity?: number }) => {
+            const path = typeof m.file_path === "string" ? m.file_path : "(unknown)";
+            const content = typeof m.content === "string" ? m.content : "";
+            const similarity =
+              typeof m.similarity === "number"
+                ? m.similarity.toFixed(3)
+                : "n/a";
+            return [
+              `### ${path} (similarity: ${similarity})`,
+              "```text",
+              content.slice(0, 4000),
+              "```",
+            ].join("\n");
+          })
+          .join("\n\n");
       }
-    );
-    if (matchErr) {
-      console.warn("match_documents failed:", matchErr.message);
-    } else if (Array.isArray(matches) && matches.length > 0) {
-      codebaseContext = matches
-        .map((m: { file_path?: string; content?: string; similarity?: number }) => {
-          const path = typeof m.file_path === "string" ? m.file_path : "(unknown)";
-          const content = typeof m.content === "string" ? m.content : "";
-          const similarity =
-            typeof m.similarity === "number"
-              ? m.similarity.toFixed(3)
-              : "n/a";
-          return [
-            `### ${path} (similarity: ${similarity})`,
-            "```text",
-            content.slice(0, 4000),
-            "```",
-          ].join("\n");
-        })
-        .join("\n\n");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("RAG retrieval fallback:", msg);
+      codebaseContext = "";
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn("RAG retrieval fallback:", msg);
-    // graceful fallback: continue chat without codebase context
-    codebaseContext = "";
   }
 
-  const builtMessages = buildOpenAIMessages(payload, codebaseContext);
+  const builtMessages = assembleChatMessages(masterSystem, payload, codebaseContext);
   const messages = sanitizeChatMessages(builtMessages);
+  const approxPromptTokens = messages.reduce(
+    (sum, m) => sum + estimateTokens(String(m.content ?? "")),
+    0,
+  );
+  console.log(`[chat] approx prompt tokens (len/4): ${approxPromptTokens}`);
 
   const requestBody = buildUpstreamChatRequestBody(upstreamModel, messages);
 
@@ -567,10 +906,10 @@ async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: "Empty upstream body" }, 502);
   }
 
-  const inputCharCount = messages.reduce(
-    (acc, m) => acc + m.content.length,
-    0,
-  );
+  const inputCharCount = messages.reduce((acc, m) => {
+    const c = m.content;
+    return acc + (typeof c === "string" ? c.length : 0);
+  }, 0);
 
   const outputStream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -578,8 +917,10 @@ async function handler(req: Request): Promise<Response> {
       let usedTokensFromStream: number | null = null;
       let outputCharCount = 0;
       try {
+        const toolAcc: ToolCallAcc = new Map();
         for await (const chunk of transformUpstreamStreamToUltraSSE(
           upstreamBody,
+          toolAcc,
         )) {
           const text = new TextDecoder().decode(chunk);
           for (const line of text.split("\n")) {

@@ -37,7 +37,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run build:webview",
-    "compile": "tsc -p ./",
+    "compile": "node scripts/gen-config.mjs && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "build:webview": "node webview/esbuild.mjs && npm run build:webview:css",
     "build:webview:css": "tailwindcss -i ./webview/src/index.css -o ./media/webview.css --minify",
@@ -58,6 +58,7 @@
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
     "autoprefixer": "^10.4.17",
+    "dotenv": "^16.4.5",
     "esbuild": "^0.20.0",
     "postcss": "^8.4.33",
     "react": "^18.2.0",
