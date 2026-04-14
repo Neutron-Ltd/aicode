@@ -12,7 +12,9 @@ export type WebviewToHostMessage =
   | { type: "SEND_MESSAGE"; payload: { text: string; modelId: string } }
   | { type: "INDEX_WORKSPACE" }
   | { type: "INSERT_CODE"; payload: { code: string } }
-  | { type: "LOGOUT_REQUEST" };
+  | { type: "LOGOUT_REQUEST" }
+  | { type: "TOOL_PLAN_CONFIRM"; payload: { planId: string } }
+  | { type: "TOOL_PLAN_CANCEL"; payload: { planId: string } };
 
 export type HostToWebviewMessage =
   | { type: "PONG"; payload: { ts: number; clientTs?: number } }
@@ -41,7 +43,22 @@ export type HostToWebviewMessage =
   | { type: "INDEX_COMPLETE"; payload: { files: number; chunks: number } }
   | { type: "INDEX_ERROR"; payload: { message: string } }
   /** Session cleared after sign-out. */
-  | { type: "LOGGED_OUT" };
+  | { type: "LOGGED_OUT" }
+  /** AI tool batch awaiting user confirmation in the webview. */
+  | {
+      type: "TOOL_PLAN_PENDING";
+      payload: {
+        planId: string;
+        steps: Array<{
+          id: string;
+          tool: string;
+          path?: string;
+          summary: string;
+        }>;
+      };
+    }
+  /** Host cleared the plan banner (confirmed path or cancelled). */
+  | { type: "TOOL_PLAN_CLEARED"; payload: { planId: string } };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -98,6 +115,20 @@ export function parseWebviewMessage(raw: unknown): WebviewToHostMessage | null {
     }
     case "LOGOUT_REQUEST":
       return { type: "LOGOUT_REQUEST" };
+    case "TOOL_PLAN_CONFIRM": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const planId = p.planId;
+      if (typeof planId !== "string") return null;
+      return { type: "TOOL_PLAN_CONFIRM", payload: { planId } };
+    }
+    case "TOOL_PLAN_CANCEL": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const planId = p.planId;
+      if (typeof planId !== "string") return null;
+      return { type: "TOOL_PLAN_CANCEL", payload: { planId } };
+    }
     default:
       return null;
   }
@@ -205,6 +236,39 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
     }
     case "LOGGED_OUT":
       return { type: "LOGGED_OUT" };
+    case "TOOL_PLAN_PENDING": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const planId = p.planId;
+      const steps = p.steps;
+      if (typeof planId !== "string" || !Array.isArray(steps)) return null;
+      const out: Array<{
+        id: string;
+        tool: string;
+        path?: string;
+        summary: string;
+      }> = [];
+      for (const s of steps) {
+        if (!isRecord(s)) return null;
+        const id = s.id;
+        const tool = s.tool;
+        const summary = s.summary;
+        if (typeof id !== "string" || typeof tool !== "string" || typeof summary !== "string") {
+          return null;
+        }
+        let path: string | undefined;
+        if (typeof s.path === "string") path = s.path;
+        out.push({ id, tool, path, summary });
+      }
+      return { type: "TOOL_PLAN_PENDING", payload: { planId, steps: out } };
+    }
+    case "TOOL_PLAN_CLEARED": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const planId = p.planId;
+      if (typeof planId !== "string") return null;
+      return { type: "TOOL_PLAN_CLEARED", payload: { planId } };
+    }
     default:
       return null;
   }

@@ -686,13 +686,20 @@ Events for tools, reasoning failures, undo-after-AI, and similar.
 
 ## 6. Future enhancements
 
-Planned UX that is **not** implemented in this pass.
+Additional UX beyond the core chat loop; items below are implemented unless noted.
 
 ### 6.1 Multi-turn planning UI
 
 Show a plan of edits before executing several steps.
 
-**Status:** ❌ No
+**Status:** ✅ Yes — host posts `TOOL_PLAN_PENDING` with parsed `tool_calls` steps; the webview shows **Confirm** / **Cancel**; send is disabled until resolved.
+
+**Technical reference**
+
+- `src/shared/messages.ts` — `TOOL_PLAN_PENDING`, `TOOL_PLAN_CONFIRM`, `TOOL_PLAN_CANCEL`, `TOOL_PLAN_CLEARED`
+- `src/services/ApiService.ts` — `waitForToolPlan`, `handleToolPlanResolution`
+- `src/toolPlanParse.ts` — `buildToolPlanSteps`
+- `webview/src/store/ultraStore.ts`, `webview/src/components/chat/ToolPlanPanel.tsx`
 
 ------------------------------------------------------------------------------------------
 
@@ -700,7 +707,14 @@ Show a plan of edits before executing several steps.
 
 Review diffs in the editor before applying.
 
-**Status:** ❌ No
+**Status:** ✅ Yes — for `write_file` / `create_file` after plan confirmation, `vscode.diff` compares workspace text vs proposed content (`buildultra-preview` virtual URIs); a modal **Apply** / **Skip** runs before `ToolExecutionService.executeOne`.
+
+**Technical reference**
+
+- `src/virtualDocumentProvider.ts` — `BuildUltraPreviewProvider`
+- `src/diffReview.ts` — `openMutationDiffAndConfirm`
+- `src/extension.ts` — `registerTextDocumentContentProvider("buildultra-preview", …)`
+- `src/services/ApiService.ts` — `maybeConfirmThenExecute`
 
 ------------------------------------------------------------------------------------------
 

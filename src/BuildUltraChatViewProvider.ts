@@ -169,6 +169,14 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
       }
+      case "TOOL_PLAN_CONFIRM": {
+        this._api?.handleToolPlanResolution(msg.payload.planId, true);
+        break;
+      }
+      case "TOOL_PLAN_CANCEL": {
+        this._api?.handleToolPlanResolution(msg.payload.planId, false);
+        break;
+      }
       case "INSERT_CODE":
         void this._insertCodeAtCursor(msg.payload.code);
         break;

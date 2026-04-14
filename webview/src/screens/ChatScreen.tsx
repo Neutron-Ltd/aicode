@@ -8,6 +8,7 @@ import { Header } from "../components/chat/Header";
 import { InputArea } from "../components/chat/InputArea";
 import { MessageList } from "../components/chat/MessageList";
 import { SettingsPanel } from "../components/chat/SettingsPanel";
+import { ToolPlanPanel } from "../components/chat/ToolPlanPanel";
 import { useUltraStore } from "../store/ultraStore";
 
 export function ChatScreen(): React.ReactElement {
@@ -28,6 +29,9 @@ export function ChatScreen(): React.ReactElement {
   const clearChat = useUltraStore((s) => s.clearChat);
   const requestLogout = useUltraStore((s) => s.requestLogout);
   const dismissChatError = useUltraStore((s) => s.dismissChatError);
+  const pendingToolPlan = useUltraStore((s) => s.pendingToolPlan);
+  const confirmToolPlan = useUltraStore((s) => s.confirmToolPlan);
+  const cancelToolPlan = useUltraStore((s) => s.cancelToolPlan);
 
   const clearChatDisabled =
     messages.length === 0 || isSending;
@@ -64,6 +68,13 @@ export function ChatScreen(): React.ReactElement {
         {chatError ? (
           <ChatErrorBanner message={chatError} onDismiss={dismissChatError} />
         ) : null}
+        {pendingToolPlan ? (
+          <ToolPlanPanel
+            plan={pendingToolPlan}
+            onConfirm={confirmToolPlan}
+            onCancel={cancelToolPlan}
+          />
+        ) : null}
         <MessageList
           messages={messages}
           onApplyCode={requestInsertCode}
@@ -73,7 +84,7 @@ export function ChatScreen(): React.ReactElement {
           value={inputDraft}
           onChange={setInputDraft}
           onSend={sendUserMessage}
-          disabled={isSending}
+          disabled={isSending || !!pendingToolPlan}
         />
       </div>
     </div>

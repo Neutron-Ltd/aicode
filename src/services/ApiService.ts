@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
+import { openMutationDiffAndConfirm } from "../diffReview";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import type { ChatPayload } from "../types/chatPayload";
 import type { HostToWebviewMessage } from "../shared/messages";
+import { buildToolPlanSteps } from "../toolPlanParse";
+import type { BuildUltraPreviewProvider } from "../virtualDocumentProvider";
 import type { AuthService } from "./AuthService";
 import type { PromptBuilderService } from "./PromptBuilderService";
 import type { ToolCallWire, ToolExecutionService } from "./ToolExecutionService";
@@ -32,12 +35,85 @@ type Conv = NonNullable<ChatPayload["conversationOverride"]>;
  * Upstream API keys stay **only** in the Edge Function env — never in the extension.
  */
 export class ApiService {
+  private readonly planResolvers = new Map<string, (ok: boolean) => void>();
+
   constructor(
     private readonly auth: AuthService,
     private readonly promptBuilder: PromptBuilderService,
     private readonly tools: ToolExecutionService,
+    private readonly previewProvider: BuildUltraPreviewProvider,
     private readonly postToWebview: (msg: HostToWebviewMessage) => void
   ) {}
+
+  /**
+   * Invoked when the webview confirms or cancels a pending AI tool plan.
+   */
+  handleToolPlanResolution(planId: string, confirmed: boolean): void {
+    const resolve = this.planResolvers.get(planId);
+    if (resolve) {
+      this.planResolvers.delete(planId);
+      resolve(confirmed);
+    }
+  }
+
+  private waitForToolPlan(planId: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.planResolvers.set(planId, resolve);
+    });
+  }
+
+  /**
+   * After webview plan approval: optional `vscode.diff` for mutations, then execute tool.
+   */
+  private async maybeConfirmThenExecute(
+    tc: ToolCallWire,
+    expectedVersions: Map<string, number>
+  ): Promise<{ tool_call_id: string; content: string; name: string; aborted?: string }> {
+    const name = tc.function.name;
+    if (name !== "write_file" && name !== "create_file") {
+      return this.tools.executeOne(tc, expectedVersions);
+    }
+    let args: Record<string, unknown>;
+    try {
+      args = JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
+    } catch {
+      return this.tools.executeOne(tc, expectedVersions);
+    }
+    const rel = typeof args.path === "string" ? args.path : "";
+    const uri = this.tools.resolveAllowedPath(rel);
+    if (!uri) {
+      return this.tools.executeOne(tc, expectedVersions);
+    }
+    const proposed = typeof args.content === "string" ? args.content : "";
+    let currentText = "";
+    try {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      currentText = doc.getText();
+    } catch {
+      currentText = "";
+    }
+    const range =
+      name === "write_file"
+        ? (args.range as { startLine?: number; endLine?: number } | undefined)
+        : undefined;
+
+    const confirmed = await openMutationDiffAndConfirm({
+      provider: this.previewProvider,
+      title: "Ultra AI",
+      relPath: rel || "(file)",
+      currentText,
+      proposedText: proposed,
+      range,
+    });
+    if (!confirmed) {
+      return {
+        tool_call_id: tc.id,
+        name,
+        content: "User skipped applying this edit after review.",
+      };
+    }
+    return this.tools.executeOne(tc, expectedVersions);
+  }
 
   async sendChatMessage(query: string, modelId: string): Promise<void> {
     const url = SUPABASE_URL.trim();
@@ -128,16 +204,30 @@ export class ApiService {
         const ctxBundle = this.promptBuilder.buildToolFollowupContextBundle(base);
         const userQuery = query.trim();
 
-        const expectedVersions = new Map<string, number>();
         const assistantMsg: Conv[number] = {
           role: "assistant",
           content: assistantText.trim() ? assistantText : null,
           tool_calls: toolCalls,
         };
 
+        const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const steps = buildToolPlanSteps(toolCalls);
+        this.postToWebview({
+          type: "TOOL_PLAN_PENDING",
+          payload: { planId, steps },
+        });
+
+        const planConfirmed = await this.waitForToolPlan(planId);
+        this.postToWebview({ type: "TOOL_PLAN_CLEARED", payload: { planId } });
+
+        if (!planConfirmed) {
+          break;
+        }
+
+        const expectedVersions = new Map<string, number>();
         const toolMsgs: Conv = [];
         for (const tc of toolCalls) {
-          const result = await this.tools.executeOne(tc, expectedVersions);
+          const result = await this.maybeConfirmThenExecute(tc, expectedVersions);
           toolMsgs.push({
             role: "tool",
             content: result.content,

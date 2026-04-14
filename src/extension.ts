@@ -9,6 +9,7 @@ import { ToolExecutionService } from "./services/ToolExecutionService";
 import { BuildUltraChatViewProvider } from "./BuildUltraChatViewProvider";
 import { registerAiUndoTelemetry } from "./aiUndoTelemetry";
 import { initExtensionTelemetry, shutdownExtensionTelemetry } from "./telemetry";
+import { BuildUltraPreviewProvider } from "./virtualDocumentProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   initExtensionTelemetry(context);
@@ -21,8 +22,19 @@ export function activate(context: vscode.ExtensionContext): void {
   const toolExecution = new ToolExecutionService(
     () => vscode.workspace.workspaceFolders?.[0]?.uri ?? null
   );
-  const api = new ApiService(auth, promptBuilder, toolExecution, (msg) =>
-    provider.postHostMessage(msg)
+  const previewProvider = new BuildUltraPreviewProvider();
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      "buildultra-preview",
+      previewProvider
+    )
+  );
+  const api = new ApiService(
+    auth,
+    promptBuilder,
+    toolExecution,
+    previewProvider,
+    (msg) => provider.postHostMessage(msg)
   );
   const scanner = new WorkspaceScannerService(auth, (msg) =>
     provider.postHostMessage(msg)

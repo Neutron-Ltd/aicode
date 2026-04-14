@@ -22,6 +22,11 @@ export class ToolExecutionService {
 
   constructor(private readonly getWorkspaceRoot: () => vscode.Uri | null) {}
 
+  /** Exposed for diff preview / plan UI (same rules as tool execution). */
+  resolveAllowedPath(rel: string): vscode.Uri | null {
+    return this.resolvePath(rel);
+  }
+
   private resolvePath(rel: string): vscode.Uri | null {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) return null;

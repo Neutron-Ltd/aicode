@@ -3,6 +3,16 @@ import type { HostToWebviewMessage } from "../../../src/shared/messages";
 import { postToHost } from "../vscodeApi";
 import { DEFAULT_CHAT_MODEL_ID, type ChatMessage } from "../types/chat";
 
+export type PendingToolPlan = {
+  planId: string;
+  steps: Array<{
+    id: string;
+    tool: string;
+    path?: string;
+    summary: string;
+  }>;
+};
+
 export interface UltraState {
   isLoggedIn: boolean;
   userLabel: string | null;
@@ -22,6 +32,8 @@ export interface UltraState {
   messages: ChatMessage[];
   inputDraft: string;
   isSending: boolean;
+  /** AI tool batch awaiting Confirm / Cancel in the webview. */
+  pendingToolPlan: PendingToolPlan | null;
 
   applyHostMessage: (msg: HostToWebviewMessage) => void;
   setInputDraft: (v: string) => void;
@@ -36,6 +48,8 @@ export interface UltraState {
   requestLogout: () => void;
   dismissChatError: () => void;
   dismissServiceMaintenance: () => void;
+  confirmToolPlan: () => void;
+  cancelToolPlan: () => void;
 }
 
 export const useUltraStore = create<UltraState>((set, get) => ({
@@ -54,6 +68,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   messages: [],
   inputDraft: "",
   isSending: false,
+  pendingToolPlan: null,
 
   applyHostMessage: (msg: HostToWebviewMessage) => {
     switch (msg.type) {
@@ -199,7 +214,23 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           isIndexing: false,
           messages: [],
           inputDraft: "",
+          pendingToolPlan: null,
         });
+        break;
+      case "TOOL_PLAN_PENDING":
+        set({
+          pendingToolPlan: {
+            planId: msg.payload.planId,
+            steps: msg.payload.steps,
+          },
+        });
+        break;
+      case "TOOL_PLAN_CLEARED":
+        set((s) =>
+          s.pendingToolPlan?.planId === msg.payload.planId
+            ? { pendingToolPlan: null }
+            : {}
+        );
         break;
     }
   },
@@ -237,7 +268,8 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   sendUserMessage: () => {
-    const { inputDraft } = get();
+    const { inputDraft, pendingToolPlan } = get();
+    if (pendingToolPlan) return;
     const text = inputDraft.trim();
     if (!text) return;
 
@@ -266,7 +298,12 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   clearChat: () => {
-    set({ messages: [], chatError: null, serviceMaintenance: false });
+    set({
+      messages: [],
+      chatError: null,
+      serviceMaintenance: false,
+      pendingToolPlan: null,
+    });
   },
 
   requestLogout: () => {
@@ -276,4 +313,22 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   dismissChatError: () => set({ chatError: null }),
 
   dismissServiceMaintenance: () => set({ serviceMaintenance: false }),
+
+  confirmToolPlan: () => {
+    const plan = get().pendingToolPlan;
+    if (!plan) return;
+    postToHost({
+      type: "TOOL_PLAN_CONFIRM",
+      payload: { planId: plan.planId },
+    });
+  },
+
+  cancelToolPlan: () => {
+    const plan = get().pendingToolPlan;
+    if (!plan) return;
+    postToHost({
+      type: "TOOL_PLAN_CANCEL",
+      payload: { planId: plan.planId },
+    });
+  },
 }));
