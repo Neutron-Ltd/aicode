@@ -155,6 +155,11 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
+/** Upstream LLM unreachable or error — client shows maintenance UI (no raw provider details). */
+function maintenanceJsonResponse(): Response {
+  return jsonResponse({ status: "maintenance" }, 503);
+}
+
 /** Matches extension `src/types/chatPayload.ts` */
 interface ChatPayload {
   query: string;
@@ -861,49 +866,36 @@ async function handler(req: Request): Promise<Response> {
 
   console.log("Sending to upstream:", JSON.stringify(requestBody, null, 2));
 
-  const upstreamResponse = await fetch(upstreamChatUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(upstreamChatUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[chat] upstream fetch failed:", msg);
+    return maintenanceJsonResponse();
+  }
 
   if (!upstreamResponse.ok) {
-    const errText = await upstreamResponse.text();
-    let providerMessage = errText;
-    try {
-      const j = JSON.parse(errText) as {
-        error?: { message?: string } | string;
-        message?: string;
-        msg?: string;
-      };
-      if (typeof j.error === "string") {
-        providerMessage = j.error;
-      } else if (j.error && typeof j.error === "object" && j.error.message) {
-        providerMessage = j.error.message;
-      } else if (typeof j.message === "string") {
-        providerMessage = j.message;
-      } else if (typeof j.msg === "string") {
-        providerMessage = j.msg;
-      }
-    } catch {
-      /* use raw errText */
-    }
-    return jsonResponse(
-      {
-        error: providerMessage.slice(0, 4000),
-        upstream_status: upstreamResponse.status,
-        upstream_raw: errText.slice(0, 8000),
-      },
-      502,
+    const errText = await upstreamResponse.text().catch(() => "");
+    console.warn(
+      "[chat] upstream HTTP error:",
+      upstreamResponse.status,
+      errText.slice(0, 500),
     );
+    return maintenanceJsonResponse();
   }
 
   const upstreamBody = upstreamResponse.body;
   if (!upstreamBody) {
-    return jsonResponse({ error: "Empty upstream body" }, 502);
+    console.warn("[chat] upstream returned empty body stream");
+    return maintenanceJsonResponse();
   }
 
   const inputCharCount = messages.reduce((acc, m) => {

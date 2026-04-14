@@ -33,7 +33,10 @@ export type HostToWebviewMessage =
   /** Stream finished successfully. */
   | { type: "CHAT_STREAM_END"; payload: { id: string } }
   /** Chat / Edge / network failure (distinct from AUTH_ERROR). */
-  | { type: "CHAT_ERROR"; payload: { message: string } }
+  | {
+      type: "CHAT_ERROR";
+      payload: { message: string; kind?: "maintenance" };
+    }
   | { type: "INDEX_STARTED" }
   | { type: "INDEX_COMPLETE"; payload: { files: number; chunks: number } }
   | { type: "INDEX_ERROR"; payload: { message: string } }
@@ -173,7 +176,15 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       if (!isRecord(p)) return null;
       const message = p.message;
       if (typeof message !== "string") return null;
-      return { type: "CHAT_ERROR", payload: { message } };
+      const kind = p.kind;
+      if (kind !== undefined && kind !== "maintenance") return null;
+      return {
+        type: "CHAT_ERROR",
+        payload:
+          kind === "maintenance"
+            ? { message, kind: "maintenance" }
+            : { message },
+      };
     }
     case "INDEX_STARTED":
       return { type: "INDEX_STARTED" };

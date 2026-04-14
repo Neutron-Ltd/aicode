@@ -46,14 +46,12 @@ export class ApiService {
       const message =
         "Build Ultra is not configured. Backend URL and key are missing in the extension build.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
       return;
     }
 
     if (!this.auth.getSupabaseClient()) {
       const message = "Build Ultra client not configured.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
       return;
     }
 
@@ -61,7 +59,6 @@ export class ApiService {
     if (!token) {
       const message = "Sign in to use chat.";
       this.postChatError(message);
-      void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
       return;
     }
 
@@ -71,6 +68,7 @@ export class ApiService {
       payload: { id: assistantId },
     });
 
+    let chatAborted = false;
     try {
       let base = await this.promptBuilder.buildChatPayload(query, modelId);
       const chatUrl = `${url.replace(/\/$/, "")}/functions/v1/chat`;
@@ -99,16 +97,15 @@ export class ApiService {
         if (response.status === 429) {
           const errText = await response.text().catch(() => response.statusText);
           const message = `Rate limited: ${errText.slice(0, 400)}`;
-          this.postChatError(message);
+          this.postToWebview({ type: "CHAT_ERROR", payload: { message } });
           void vscode.window.showWarningMessage(`Build Ultra: ${message}`);
+          chatAborted = true;
           break;
         }
 
         if (!response.ok) {
-          const errText = await response.text().catch(() => response.statusText);
-          const message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
-          this.postChatError(message);
-          void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
+          await this.handleChatHttpError(response);
+          chatAborted = true;
           break;
         }
 
@@ -161,19 +158,50 @@ export class ApiService {
         }
       }
 
-      this.postToWebview({
-        type: "CHAT_STREAM_END",
-        payload: { id: assistantId },
-      });
+      if (!chatAborted) {
+        this.postToWebview({
+          type: "CHAT_STREAM_END",
+          payload: { id: assistantId },
+        });
+      }
     } catch (e) {
+      chatAborted = true;
       const message = e instanceof Error ? e.message : String(e);
       this.postChatError(message);
+    }
+  }
+
+  private postChatError(message: string, kind?: "maintenance"): void {
+    if (kind === "maintenance") {
+      this.postToWebview({
+        type: "CHAT_ERROR",
+        payload: { message, kind: "maintenance" },
+      });
+      void vscode.window.showWarningMessage(`Build Ultra: ${message}`);
+    } else {
+      this.postToWebview({ type: "CHAT_ERROR", payload: { message } });
       void vscode.window.showErrorMessage(`Build Ultra: ${message}`);
     }
   }
 
-  private postChatError(message: string): void {
-    this.postToWebview({ type: "CHAT_ERROR", payload: { message } });
+  /** Parses JSON `{ status: "maintenance" }` from Edge or falls back to generic error text. */
+  private async handleChatHttpError(response: Response): Promise<void> {
+    const errText = await response.text().catch(() => response.statusText);
+    let message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
+    let kind: "maintenance" | undefined;
+    const trimmed = errText.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const j = JSON.parse(trimmed) as { status?: unknown };
+        if (j.status === "maintenance") {
+          kind = "maintenance";
+          message = "Service temporarily unavailable.";
+        }
+      } catch {
+        /* keep generic */
+      }
+    }
+    this.postChatError(message, kind);
   }
 
   private async streamSse(

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import type { ChatMessage } from "../../types/chat";
+import { useUltraStore } from "../../store/ultraStore";
 import { MarkdownMessage } from "./MarkdownMessage";
 
 /** Pixels from bottom to consider "following" the stream (auto-scroll). */
@@ -14,6 +15,10 @@ export function MessageList({
   onApplyCode: (code: string) => void;
   isSending: boolean;
 }): React.ReactElement {
+  const serviceMaintenance = useUltraStore((s) => s.serviceMaintenance);
+  const dismissServiceMaintenance = useUltraStore(
+    (s) => s.dismissServiceMaintenance
+  );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   /** When true, new content scrolls the list to the bottom (instant, rAF). */
   const followBottomRef = useRef(true);
@@ -95,6 +100,45 @@ export function MessageList({
       style={{ overflowAnchor: "auto" }}
       onScroll={updateFollowFromScroll}
     >
+      {serviceMaintenance ? (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="flex shrink-0 flex-col gap-2 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2.5"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p
+                className="text-[13px] font-semibold leading-snug"
+                style={{ color: "var(--vscode-editorWarning-foreground)" }}
+              >
+                Service Temporarily Unavailable
+              </p>
+              <p
+                className="mt-1 text-[12px] leading-relaxed"
+                style={{
+                  color: "color-mix(in srgb, var(--vscode-foreground) 88%, transparent)",
+                }}
+              >
+                The AI service cannot be reached right now. Please try again in
+                a few minutes.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded px-2 py-1 text-[11px] font-medium"
+              style={{
+                color: "var(--vscode-textLink-foreground)",
+                background:
+                  "color-mix(in srgb, var(--vscode-editor-foreground) 8%, transparent)",
+              }}
+              onClick={() => dismissServiceMaintenance()}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
       {messages.map((m) => {
         if (m.role === "assistant" && m.content === "" && isSending) {
           return null;

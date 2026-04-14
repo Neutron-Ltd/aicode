@@ -13,6 +13,8 @@ export interface UltraState {
   authError: string | null;
   /** Chat / Edge / network errors (distinct from auth). */
   chatError: string | null;
+  /** Upstream LLM unavailable (`CHAT_ERROR` with `kind: "maintenance"`). */
+  serviceMaintenance: boolean;
   lastPongAt: number | null;
   lastPongClientTs: number | null;
   tokenQuota: number;
@@ -33,6 +35,7 @@ export interface UltraState {
   clearChat: () => void;
   requestLogout: () => void;
   dismissChatError: () => void;
+  dismissServiceMaintenance: () => void;
 }
 
 export const useUltraStore = create<UltraState>((set, get) => ({
@@ -43,6 +46,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   pendingAuth: "none",
   authError: null,
   chatError: null,
+  serviceMaintenance: false,
   lastPongAt: null,
   lastPongClientTs: null,
   tokenQuota: 142_000,
@@ -81,13 +85,17 @@ export const useUltraStore = create<UltraState>((set, get) => ({
         set({ tokenQuota: msg.payload.remaining });
         break;
       case "INDEX_STARTED":
-        set({ isIndexing: true, chatError: null });
+        set({ isIndexing: true, chatError: null, serviceMaintenance: false });
         break;
       case "INDEX_COMPLETE":
-        set({ isIndexing: false, chatError: null });
+        set({ isIndexing: false, chatError: null, serviceMaintenance: false });
         break;
       case "INDEX_ERROR":
-        set({ isIndexing: false, chatError: msg.payload.message });
+        set({
+          isIndexing: false,
+          chatError: msg.payload.message,
+          serviceMaintenance: false,
+        });
         break;
       case "RECEIVE_RESPONSE":
         set((s) => ({
@@ -101,6 +109,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           ],
           isSending: false,
           chatError: null,
+          serviceMaintenance: false,
         }));
         break;
       case "CHAT_STREAM_START":
@@ -114,6 +123,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             },
           ],
           chatError: null,
+          serviceMaintenance: false,
         }));
         break;
       case "CHAT_STREAM_DELTA":
@@ -132,10 +142,11 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             last?.role === "assistant" &&
             (last.content ?? "").trim().length === 0;
           if (!emptyAssistant) {
-            return { isSending: false };
+            return { isSending: false, serviceMaintenance: false };
           }
           return {
             isSending: false,
+            serviceMaintenance: false,
             messages: s.messages.map((m, idx) =>
               idx === s.messages.length - 1 && m.role === "assistant"
                 ? {
@@ -149,10 +160,30 @@ export const useUltraStore = create<UltraState>((set, get) => ({
         });
         break;
       case "CHAT_ERROR":
-        set({
-          isSending: false,
-          chatError: msg.payload.message,
-        });
+        if (msg.payload.kind === "maintenance") {
+          set((s) => {
+            const messages = [...s.messages];
+            const last = messages[messages.length - 1];
+            if (
+              last?.role === "assistant" &&
+              !(last.content ?? "").trim()
+            ) {
+              messages.pop();
+            }
+            return {
+              isSending: false,
+              chatError: null,
+              serviceMaintenance: true,
+              messages,
+            };
+          });
+        } else {
+          set({
+            isSending: false,
+            chatError: msg.payload.message,
+            serviceMaintenance: false,
+          });
+        }
         break;
       case "LOGGED_OUT":
         set({
@@ -163,6 +194,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           pendingAuth: "none",
           authError: null,
           chatError: null,
+          serviceMaintenance: false,
           isSending: false,
           isIndexing: false,
           messages: [],
@@ -220,6 +252,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
       inputDraft: "",
       isSending: true,
       chatError: null,
+      serviceMaintenance: false,
     }));
 
     postToHost({
@@ -233,7 +266,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   clearChat: () => {
-    set({ messages: [], chatError: null });
+    set({ messages: [], chatError: null, serviceMaintenance: false });
   },
 
   requestLogout: () => {
@@ -241,4 +274,6 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   dismissChatError: () => set({ chatError: null }),
+
+  dismissServiceMaintenance: () => set({ serviceMaintenance: false }),
 }));

@@ -1,6 +1,6 @@
 # Product Requirements Document: Build Ultra
 
-*Last reviewed against codebase: Section 3 PRD alignment pass (Apr 2026).*
+*Last reviewed against codebase: Sections 3–4 PRD alignment + §4.3 graceful degradation (Apr 2026).*
 
 ### How to read status labels
 
@@ -581,7 +581,7 @@ Per-user requests per rolling minute bucket are tracked in Postgres (`chat_rate_
 
 Deployment shape, failure behavior, and quota accounting.
 
-### 4.1 Edge as the primary proxy
+### 4.1 Edge as the primary proxy ✅ Done
 
 All AI traffic goes through Supabase Functions, not direct browser-to-vendor calls.
 
@@ -593,27 +593,33 @@ All AI traffic goes through Supabase Functions, not direct browser-to-vendor cal
 
 ------------------------------------------------------------------------------------------
 
-### 4.2 Multi-region Edge
+### 4.2 Multi-region Edge ❌ N/A (hosting)
 
 Run functions in multiple regions for lower latency.
 
-**Status:** ❌ Not expressed in application source
+**Status:** ❌ No — not expressed in application source
 
-This is a Supabase project / hosting setting, not something the repo encodes.
+This is a Supabase project / hosting setting, not something the repo encodes. **No code change required** for this PRD row.
 
 ------------------------------------------------------------------------------------------
 
-### 4.3 Graceful degradation and maintenance notice
+### 4.3 Graceful degradation and maintenance notice ✅ Done
 
 When upstream AI is down, show a clear maintenance-style message instead of failing silently.
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes
 
-Generic HTTP and SSE errors; no dedicated maintenance payload or schema.
+Edge returns **503** with JSON `{ "status": "maintenance" }` when the upstream LLM request fails or the upstream `fetch` throws. The extension maps that to `CHAT_ERROR` with `kind: "maintenance"`; the webview shows a **Service Temporarily Unavailable** banner in `MessageList` (not the generic red `ChatErrorBanner`).
+
+**Technical reference**
+
+- `supabase/functions/chat/index.ts` — `maintenanceJsonResponse`, upstream `fetch` try/catch
+- `src/services/ApiService.ts` — `handleChatHttpError`
+- `webview/src/components/chat/MessageList.tsx`, `webview/src/store/ultraStore.ts` — `serviceMaintenance`
 
 ------------------------------------------------------------------------------------------
 
-### 4.4 Quota deduction
+### 4.4 Quota deduction ✅ Done
 
 After a completed stream, subtract estimated usage from the user’s quota in the database.
 
@@ -787,3 +793,4 @@ Edge responses include OPTIONS handling and CORS headers for cross-origin client
 - ✅ = implemented or substantially present in repository source.
 - ❌ = not found or not implemented as specified.
 - ⚠️ **Partial** = some related behavior exists but does not meet the full requirement.
+- Section headings may add **✅ Done** / **✅ Yes** when the row is satisfied, **❌ N/A** when the PRD item is hosting-only or out of scope for app code, or **⚠️ Partial** when intentionally incomplete—scan headings in §3–§4 for a quick status pass.
