@@ -6,8 +6,10 @@ import { PromptBuilderService } from "./services/PromptBuilderService";
 import { TerminalService } from "./services/TerminalService";
 import { WorkspaceScannerService } from "./services/WorkspaceScannerService";
 import { BuildUltraChatViewProvider } from "./BuildUltraChatViewProvider";
+import { initExtensionTelemetry, shutdownExtensionTelemetry } from "./telemetry";
 
 export function activate(context: vscode.ExtensionContext): void {
+  initExtensionTelemetry(context);
   const editorService = new EditorService();
   const terminalService = new TerminalService();
   const promptBuilder = new PromptBuilderService(editorService, terminalService);
@@ -46,4 +48,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(terminalService);
 }
 
-export function deactivate(): void {}
+export function deactivate(): Thenable<void> | void {
+  return shutdownExtensionTelemetry();
+}

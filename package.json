@@ -45,7 +45,9 @@
     "pretest": "npm run compile && npm run build:webview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.1"
+    "@supabase/supabase-js": "^2.49.1",
+    "posthog-js": "^1.368.1",
+    "posthog-node": "^5.29.2"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.19",

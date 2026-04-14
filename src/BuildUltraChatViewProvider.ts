@@ -81,6 +81,7 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
       `font-src ${webview.cspSource}`,
       `style-src ${webview.cspSource}`,
       `script-src 'nonce-${nonce}'`,
+      `connect-src ${webview.cspSource} https://*.posthog.com https://us.i.posthog.com https://eu.i.posthog.com`,
     ].join("; ");
 
     webview.html = getHtmlForWebview(csp, nonce, scriptUri, styleUri);

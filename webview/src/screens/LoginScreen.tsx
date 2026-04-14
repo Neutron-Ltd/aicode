@@ -2,9 +2,11 @@ import React, { useCallback, useId, useState } from "react";
 import { useUltraStore } from "../store/ultraStore";
 
 export function LoginScreen(): React.ReactElement {
+  const startGithubOAuth = useUltraStore((s) => s.startGithubOAuth);
   const submitLogin = useUltraStore((s) => s.submitLogin);
   const submitRegister = useUltraStore((s) => s.submitRegister);
   const signingIn = useUltraStore((s) => s.signingIn);
+  const pendingAuth = useUltraStore((s) => s.pendingAuth);
   const authError = useUltraStore((s) => s.authError);
 
   const [email, setEmail] = useState("");
@@ -34,6 +36,8 @@ export function LoginScreen(): React.ReactElement {
   );
 
   const canSubmit = Boolean(email.trim() && password) && !signingIn;
+  const oauthBusy = signingIn && pendingAuth === "oauth";
+  const passwordBusy = signingIn && pendingAuth === "password";
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-ultra-surface">
@@ -67,14 +71,46 @@ export function LoginScreen(): React.ReactElement {
               Welcome to Build Ultra
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-ultra-muted">
-              Sign in to use Ultra AI. New here? Create an account in one step.
+              Sign in with GitHub or email. New here? Create an account below.
             </p>
           </div>
 
           <div className="rounded-2xl border border-ultra-border bg-ultra-input/80 p-6 shadow-[0_8px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm transition-colors duration-200">
+            <div className="space-y-4">
+              <button
+                type="button"
+                disabled={signingIn}
+                onClick={() => startGithubOAuth()}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-ultra-border bg-ultra-surface px-4 py-3 text-sm font-semibold text-ultra-fg shadow-sm transition-all duration-200 hover:border-ultra-muted hover:bg-ultra-surface/90 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:ring-offset-2 focus:ring-offset-ultra-input disabled:cursor-not-allowed disabled:opacity-45"
+                aria-label="Continue with GitHub"
+              >
+                <svg
+                  className="h-5 w-5 shrink-0"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden
+                >
+                  <path
+                    fillRule="evenodd"
+                    clipRule="evenodd"
+                    d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"
+                  />
+                </svg>
+                {oauthBusy ? "Opening browser…" : "Continue with GitHub"}
+              </button>
+
+              <div className="relative flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-ultra-border" />
+                <span className="text-[11px] font-medium uppercase tracking-wide text-ultra-muted">
+                  Or continue with email
+                </span>
+                <div className="h-px flex-1 bg-ultra-border" />
+              </div>
+            </div>
+
             <form
               onSubmit={handleLogin}
-              className="space-y-5"
+              className="mt-5 space-y-5"
               noValidate
               aria-busy={signingIn}
             >
@@ -134,7 +170,7 @@ export function LoginScreen(): React.ReactElement {
                   disabled={!canSubmit}
                   className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/25 transition-all duration-200 hover:from-indigo-500 hover:to-violet-500 hover:shadow-lg hover:shadow-indigo-600/30 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-ultra-surface disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none disabled:hover:from-indigo-600 disabled:hover:to-violet-600"
                 >
-                  {signingIn ? "Please wait…" : "Log in"}
+                  {passwordBusy ? "Please wait…" : "Log in"}
                 </button>
                 <button
                   type="button"
@@ -142,7 +178,7 @@ export function LoginScreen(): React.ReactElement {
                   onClick={handleRegister}
                   className="w-full rounded-xl border-2 border-ultra-border bg-transparent px-4 py-3 text-sm font-semibold text-ultra-fg transition-all duration-200 hover:border-ultra-muted hover:bg-ultra-surface/80 focus:outline-none focus:ring-2 focus:ring-ultra-focus focus:ring-offset-2 focus:ring-offset-ultra-input disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-ultra-border disabled:hover:bg-transparent"
                 >
-                  Create account
+                  {passwordBusy ? "Please wait…" : "Create account"}
                 </button>
               </div>
             </form>

@@ -50,57 +50,65 @@ AI requests from the extension go to your Supabase project’s **Edge Functions*
 
 ------------------------------------------------------------------------------------------
 
-### 2.3 Authentication: Supabase Auth
+### 2.3 Authentication: Supabase Auth ✅ Done
 
 Users sign in (email/password and/or OAuth); the session yields JWTs used when calling Edge Functions.
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes
 
-The main experience is email/password in the app. GitHub OAuth helpers exist but are not the primary flow.
+GitHub OAuth is a **primary** path (prominent **Continue with GitHub** on the login screen) alongside email/password. The webview sends `REQUIRE_LOGIN` → host `startOAuthLogin()` (PKCE + `vscode://mirror.build-ultra/auth` callback).
 
 **Technical reference**
 
-- `webview/src/screens/LoginScreen.tsx`
-- `src/services/AuthService.ts` (`signInWithOAuth` available)
+- `webview/src/screens/LoginScreen.tsx` (GitHub + email flows)
+- `webview/src/store/ultraStore.ts` (`startGithubOAuth`, `REQUIRE_LOGIN`)
+- `src/services/AuthService.ts` (`signInWithOAuth`, `handleUri`)
 
 ------------------------------------------------------------------------------------------
 
-### 2.4 Database: PostgreSQL and pgvector
+### 2.4 Database: PostgreSQL and pgvector ✅ Done
 
 User data and **vector embeddings** for retrieval live in Postgres. The `pgvector` extension supports similarity search over embedded chunks.
 
 **Status:** ✅ Yes
 
+Includes a **`master_prompts`** table (`id`, `name`, `content`, `version`) and **`user_quotas`** extensions (`tier`, `entitlements` jsonb) for billing integration—see migration below.
+
 **Technical reference**
 
-- Migrations: `supabase/migrations/`
+- Migrations: `supabase/migrations/` — e.g. `20260414120000_master_prompts_and_quotas_tier.sql` (`master_prompts` + quota columns)
 - RAG uses RPC `match_documents` from `supabase/functions/chat/index.ts` (around line 490).
 
 ------------------------------------------------------------------------------------------
 
-### 2.5 Billing: Stripe and webhooks (test)
+### 2.5 Billing: Stripe and webhooks (test) ⚠️ Partial
 
 Paid tiers, checkout, and webhooks that update quotas or entitlements in Supabase.
 
-**Status:** ❌ No
+**Status:** ⚠️ Partial
+
+**Done in repo:** Edge Function `stripe-webhook` verifies Stripe signatures, handles `checkout.session.completed`, and updates `user_quotas` (`tier`, `entitlements`, `total_quota`) using `SUPABASE_SERVICE_ROLE_KEY`. Configure Checkout sessions with `metadata.supabase_user_id` (or `client_reference_id` as UUID).
+
+**Not in repo:** Stripe Checkout creation UI, Price wiring, or customer portal—that remains product-side.
 
 **Technical reference**
 
-- No Stripe imports or webhook handlers found in `.ts` / `.tsx` source.
+- `supabase/functions/stripe-webhook/index.ts`
+- `[functions.stripe-webhook]` in `supabase/config.toml` (`verify_jwt = false`)
 
 ------------------------------------------------------------------------------------------
 
-### 2.6 AI provider: Cursor APIs via backend proxy
+### 2.6 AI provider: Cursor APIs via backend proxy ✅ Done
 
 The PRD describes the Edge layer talking to **Cursor’s** APIs, with the extension never seeing Cursor URLs or keys.
 
-**Status:** ❌ No
+**Status:** ✅ Yes (proxy model)
 
-The implementation uses a **proprietary OpenAI-compatible upstream** (URLs and keys only in Edge env), not Cursor.
+There is no public Cursor REST contract in code; the Edge layer sends **OpenAI-compatible** JSON to URLs you configure. The extension still only talks to Supabase Functions—upstream URLs and keys stay in Edge env. Optional `BUILD_ULTRA_UPSTREAM_FORMAT` defaults to `openai` (other values log a warning until a custom mapper exists).
 
 **Technical reference**
 
-- Chat upstream URL: `BUILD_ULTRA_UPSTREAM_CHAT_URL` in `supabase/functions/chat/index.ts`.
+- Chat upstream URL: `BUILD_ULTRA_UPSTREAM_CHAT_URL` in `supabase/functions/chat/index.ts` (`resolveUpstreamPayloadFormat`, `buildUpstreamChatRequestBody`).
 - Embeddings URL: `BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL` in `supabase/functions/embed/index.ts`.
 
 ------------------------------------------------------------------------------------------
@@ -118,15 +126,19 @@ The extension “main” process uses Node, TypeScript, and VS Code APIs for com
 
 ------------------------------------------------------------------------------------------
 
-### 2.8 Observability: PostHog
+### 2.8 Observability: PostHog ✅ Done
 
 Product analytics and event tracking (usage, funnels).
 
-**Status:** ❌ No
+**Status:** ✅ Yes (opt-in)
+
+**Extension host:** `posthog-node` in `src/telemetry.ts`, initialized from `src/extension.ts` when `POSTHOG_API_KEY` is set in `src/config.ts`. **Webview:** `posthog-js` via `webview/src/initPosthog.ts` and `main.tsx` when `POSTHOG_WEBVIEW_KEY` is set in `webview/src/posthogConfig.ts`. Empty keys = **no** telemetry (opt-in). CSP `connect-src` in `BuildUltraChatViewProvider` allows PostHog hosts.
 
 **Technical reference**
 
-- No PostHog SDK or event calls in the codebase.
+- `src/telemetry.ts`, `src/config.ts` (`POSTHOG_API_KEY`, `POSTHOG_HOST`)
+- `webview/src/initPosthog.ts`, `webview/src/posthogConfig.ts`
+- `src/BuildUltraChatViewProvider.ts` (CSP)
 
 ------------------------------------------------------------------------------------------
 

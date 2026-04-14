@@ -8,6 +8,8 @@ export interface UltraState {
   userLabel: string | null;
   userEmail: string | null;
   signingIn: boolean;
+  /** Distinguishes GitHub OAuth vs email/password for loading UI. */
+  pendingAuth: "none" | "oauth" | "password";
   authError: string | null;
   /** Chat / Edge / network errors (distinct from auth). */
   chatError: string | null;
@@ -23,6 +25,7 @@ export interface UltraState {
   setInputDraft: (v: string) => void;
   sendPing: () => void;
   indexWorkspace: () => void;
+  startGithubOAuth: () => void;
   submitLogin: (email: string, password: string) => void;
   submitRegister: (email: string, password: string) => void;
   sendUserMessage: () => void;
@@ -37,6 +40,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   userLabel: null,
   userEmail: null,
   signingIn: false,
+  pendingAuth: "none",
   authError: null,
   chatError: null,
   lastPongAt: null,
@@ -60,13 +64,18 @@ export const useUltraStore = create<UltraState>((set, get) => ({
         set({
           isLoggedIn: true,
           signingIn: false,
+          pendingAuth: "none",
           authError: null,
           userLabel: msg.payload.displayName,
           userEmail: msg.payload.email ?? null,
         });
         break;
       case "AUTH_ERROR":
-        set({ signingIn: false, authError: msg.payload.message });
+        set({
+          signingIn: false,
+          pendingAuth: "none",
+          authError: msg.payload.message,
+        });
         break;
       case "UPDATE_QUOTA":
         set({ tokenQuota: msg.payload.remaining });
@@ -151,6 +160,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           userLabel: null,
           userEmail: null,
           signingIn: false,
+          pendingAuth: "none",
           authError: null,
           chatError: null,
           isSending: false,
@@ -173,8 +183,13 @@ export const useUltraStore = create<UltraState>((set, get) => ({
     postToHost({ type: "INDEX_WORKSPACE" });
   },
 
+  startGithubOAuth: () => {
+    set({ signingIn: true, pendingAuth: "oauth", authError: null });
+    postToHost({ type: "REQUIRE_LOGIN" });
+  },
+
   submitLogin: (email: string, password: string) => {
-    set({ signingIn: true, authError: null });
+    set({ signingIn: true, pendingAuth: "password", authError: null });
     postToHost({
       type: "LOGIN_REQUEST",
       payload: { email, password },
@@ -182,7 +197,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   submitRegister: (email: string, password: string) => {
-    set({ signingIn: true, authError: null });
+    set({ signingIn: true, pendingAuth: "password", authError: null });
     postToHost({
       type: "REGISTER_REQUEST",
       payload: { email, password },

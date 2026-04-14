@@ -3,3 +3,7 @@
 # (avoids 401 from the API gateway with publishable keys / custom auth flows).
 [functions.chat]
 verify_jwt = false
+
+# Stripe calls this endpoint with Stripe-Signature, not Supabase JWT.
+[functions.stripe-webhook]
+verify_jwt = false

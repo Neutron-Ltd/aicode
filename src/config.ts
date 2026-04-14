@@ -7,3 +7,9 @@ export const SUPABASE_ANON_KEY = "sb_publishable_v7zqqOe-6oydZsHb-y8FYg_ga-cWmS7
 
 /** OAuth provider id when using `signInWithOAuth` (e.g. github, google). */
 export const ULTRA_OAUTH_PROVIDER = "github";
+
+/** PostHog project API key for the extension host. Empty string disables telemetry. */
+export const POSTHOG_API_KEY = "";
+
+/** PostHog ingest host (US cloud default). */
+export const POSTHOG_HOST = "https://us.i.posthog.com";

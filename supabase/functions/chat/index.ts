@@ -1,7 +1,9 @@
 /**
  * Build Ultra — Supabase Edge Function `chat`
  *
- * Secure bridge between the VS Code extension and a proprietary OpenAI-compatible upstream.
+ * Secure bridge between the VS Code extension and a backend-owned upstream (e.g. OpenAI-compatible
+ * gateways, including proxies toward IDE vendor APIs). Point `BUILD_ULTRA_UPSTREAM_CHAT_URL` at your
+ * gateway; request bodies follow the OpenAI Chat Completions shape unless a future format flag applies.
  * Deploy: set `BUILD_ULTRA_UPSTREAM_CHAT_URL`, `BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL`, and
  * `AI_UPSTREAM_KEY` (or `THREETW_AI_API_KEY`) then `supabase functions deploy chat`
  *
@@ -43,6 +45,21 @@ function resolveUpstreamModel(raw: string): string {
   if (t) return t;
   return Deno.env.get("BUILD_ULTRA_DEFAULT_CHAT_MODEL")?.trim() ||
     FALLBACK_UPSTREAM_MODEL;
+}
+
+/**
+ * Reserved for non–OpenAI-compatible gateways. Only `openai` is implemented; any other value logs a
+ * warning and still sends OpenAI-style JSON (`model`, `messages`, `stream`, etc.).
+ */
+function resolveUpstreamPayloadFormat(): "openai" {
+  const raw = Deno.env.get("BUILD_ULTRA_UPSTREAM_FORMAT")?.trim().toLowerCase();
+  if (!raw || raw === "openai") {
+    return "openai";
+  }
+  console.warn(
+    `[chat] BUILD_ULTRA_UPSTREAM_FORMAT=${raw} not implemented; using OpenAI-compatible payloads.`,
+  );
+  return "openai";
 }
 
 function buildUpstreamChatRequestBody(
@@ -376,6 +393,8 @@ async function handler(req: Request): Promise<Response> {
       503,
     );
   }
+
+  void resolveUpstreamPayloadFormat();
 
   const authHeader = req.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {

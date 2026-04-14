@@ -116,6 +116,10 @@ export class AuthService {
   }
 
   /**
+   * GitHub OAuth (see `ULTRA_OAUTH_PROVIDER` in config) is a **primary** sign-in path:
+   * {@link startOAuthLogin} with PKCE and `vscode://…/auth` callback. Enable the provider
+   * in Supabase Auth and add the redirect URL there.
+   *
    * Email/password sign-in. Session tokens are persisted by the Supabase client via
    * {@link BlobSecretStorage} → `context.secrets` (no separate manual JWT store).
    */

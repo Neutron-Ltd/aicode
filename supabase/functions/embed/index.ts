@@ -2,13 +2,25 @@
  * Build Ultra — Supabase Edge Function `embed`
  *
  * Receives workspace chunks from the extension host, generates embeddings via a
- * proprietary OpenAI-compatible API, and stores vectors in `workspace_documents`
- * using the caller's JWT (RLS enforced per-user).
+ * backend-owned OpenAI-compatible embeddings endpoint (URL from env). The gateway may proxy to
+ * vendor-specific APIs; request bodies use the OpenAI embeddings shape unless extended later.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 function resolveUpstreamEmbeddingsUrl(): string | null {
   return Deno.env.get("BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL")?.trim() || null;
+}
+
+/** See `BUILD_ULTRA_UPSTREAM_FORMAT` in `chat` — only OpenAI-compatible payloads are implemented. */
+function resolveUpstreamPayloadFormat(): "openai" {
+  const raw = Deno.env.get("BUILD_ULTRA_UPSTREAM_FORMAT")?.trim().toLowerCase();
+  if (!raw || raw === "openai") {
+    return "openai";
+  }
+  console.warn(
+    `[embed] BUILD_ULTRA_UPSTREAM_FORMAT=${raw} not implemented; using OpenAI-compatible payloads.`,
+  );
+  return "openai";
 }
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const EXPECTED_DIM = 1536;
@@ -125,6 +137,7 @@ async function handler(req: Request): Promise<Response> {
       503
     );
   }
+  void resolveUpstreamPayloadFormat();
   if (!upstreamKey) {
     return jsonResponse(
       {
