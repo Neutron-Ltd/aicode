@@ -12,6 +12,10 @@ import {
 
 /**
  * Sidebar webview for Build Ultra / Ultra AI chat UI (React + Tailwind build in /media).
+ *
+ * AI file tool calls (`read_file`, `write_file`, etc.) run in `ToolExecutionService` (see
+ * `src/services/ToolExecutionService.ts`, wired from `extension.ts`), which serializes all tool side
+ * effects through a queue so workspace edits never overlap.
  */
 export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "buildUltra.chat";

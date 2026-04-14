@@ -7,6 +7,7 @@ import { TerminalService } from "./services/TerminalService";
 import { WorkspaceScannerService } from "./services/WorkspaceScannerService";
 import { ToolExecutionService } from "./services/ToolExecutionService";
 import { BuildUltraChatViewProvider } from "./BuildUltraChatViewProvider";
+import { registerAiUndoTelemetry } from "./aiUndoTelemetry";
 import { initExtensionTelemetry, shutdownExtensionTelemetry } from "./telemetry";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -50,6 +51,7 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
   context.subscriptions.push(terminalService);
+  context.subscriptions.push(registerAiUndoTelemetry());
 }
 
 export function deactivate(): Thenable<void> | void {

@@ -1,6 +1,6 @@
 # Product Requirements Document: Build Ultra
 
-*Last reviewed against codebase: Sections 3–4 PRD alignment + §4.3 graceful degradation (Apr 2026).*
+*Last reviewed against codebase: Sections 3–5 PRD alignment, §4.3 degradation, §5 perf/telemetry (Apr 2026).*
 
 ### How to read status labels
 
@@ -577,9 +577,11 @@ Per-user requests per rolling minute bucket are tracked in Postgres (`chat_rate_
 
 ------------------------------------------------------------------------------------------
 
-## 4. Backend configuration
+## 4. Backend configuration ✅
 
 Deployment shape, failure behavior, and quota accounting.
+
+**Quick scan:** 4.1 ✅ · 4.2 ❌ N/A (hosting only) · 4.3 ✅ · 4.4 ✅
 
 ### 4.1 Edge as the primary proxy ✅ Done
 
@@ -631,17 +633,19 @@ After a completed stream, subtract estimated usage from the user’s quota in th
 
 ------------------------------------------------------------------------------------------
 
-## 5. Performance, stability, and observability
+## 5. Performance, stability, and observability ✅
 
 UI behavior during streaming, edit ordering, and product analytics.
 
-### 5.1 Throttled, smooth streaming UI
+**Quick scan:** 5.1 ✅ · 5.2 ✅ · 5.3 ✅ (PostHog events are opt-in via `POSTHOG_API_KEY`)
+
+### 5.1 Throttled, smooth streaming UI ✅ Done
 
 Avoid React thrashing when tokens arrive very quickly.
 
-**Status:** ⚠️ Partial
+**Status:** ✅ Yes
 
-`MessageList` uses `requestAnimationFrame` and follow logic; there is no explicit React 18 batching or scheduler API usage called out for this.
+`MessageList` uses **`useDeferredValue`** (React 18) for rendered messages so markdown work can lag slightly behind bursty SSE updates, plus existing **`requestAnimationFrame`** scroll coalescing and follow-bottom logic.
 
 **Technical reference**
 
@@ -649,21 +653,34 @@ Avoid React thrashing when tokens arrive very quickly.
 
 ------------------------------------------------------------------------------------------
 
-### 5.2 Queue file edits (concurrency)
+### 5.2 Queue file edits (concurrency) ✅ Done
 
 Serialize AI-driven edits so they do not race each other.
 
-**Status:** ❌ No
+**Status:** ✅ Yes
 
-Apply runs on user click; no shared edit queue.
+`ToolExecutionService` runs every `executeOne` through an **`AsyncSerialQueue`** (`src/services/toolExecutionQueue.ts`) so host-side tool effects never overlap. User **Apply** from chat remains separate. See also `BuildUltraChatViewProvider.ts` file comment.
+
+**Technical reference**
+
+- `src/services/ToolExecutionService.ts`, `src/services/toolExecutionQueue.ts`
 
 ------------------------------------------------------------------------------------------
 
-### 5.3 PostHog telemetry
+### 5.3 PostHog telemetry ✅ Done
 
 Events for tools, reasoning failures, undo-after-AI, and similar.
 
-**Status:** ❌ No
+**Status:** ✅ Yes (opt-in)
+
+- **`tool_execution`** — emitted after each tool call with `tool`, `success`, and optional `aborted`.
+- **`user_undo_action`** — heuristic: after a successful AI `write_file` / `create_file`, if document text returns to the pre-edit snapshot within **30s**, PostHog records one event (no stable VS Code undo command API).
+
+**Technical reference**
+
+- `src/telemetry.ts` — `captureTelemetryEvent`
+- `src/services/ToolExecutionService.ts`
+- `src/aiUndoTelemetry.ts`
 
 ------------------------------------------------------------------------------------------
 
@@ -793,4 +810,4 @@ Edge responses include OPTIONS handling and CORS headers for cross-origin client
 - ✅ = implemented or substantially present in repository source.
 - ❌ = not found or not implemented as specified.
 - ⚠️ **Partial** = some related behavior exists but does not meet the full requirement.
-- Section headings may add **✅ Done** / **✅ Yes** when the row is satisfied, **❌ N/A** when the PRD item is hosting-only or out of scope for app code, or **⚠️ Partial** when intentionally incomplete—scan headings in §3–§4 for a quick status pass.
+- Section headings may add **✅ Done** / **✅ Yes** when the row is satisfied, **❌ N/A** when the PRD item is hosting-only or out of scope for app code, or **⚠️ Partial** when intentionally incomplete—scan headings in §3–§5 for a quick status pass. Parent sections **§4** and **§5** include a one-line **Quick scan** roll-up at the top.

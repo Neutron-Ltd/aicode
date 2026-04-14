@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useDeferredValue, useEffect, useRef } from "react";
 import type { ChatMessage } from "../../types/chat";
 import { useUltraStore } from "../../store/ultraStore";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -19,6 +19,8 @@ export function MessageList({
   const dismissServiceMaintenance = useUltraStore(
     (s) => s.dismissServiceMaintenance
   );
+  /** Deprioritizes heavy markdown re-renders during bursty SSE (React 18). */
+  const deferredMessages = useDeferredValue(messages);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   /** When true, new content scrolls the list to the bottom (instant, rAF). */
   const followBottomRef = useRef(true);
@@ -68,7 +70,7 @@ export function MessageList({
     });
 
     return () => cancelAnimationFrame(scrollRafRef.current);
-  }, [messages, showTypingIndicator]);
+  }, [messages, deferredMessages, showTypingIndicator]);
 
   if (messages.length === 0) {
     return (
@@ -139,7 +141,7 @@ export function MessageList({
           </div>
         </div>
       ) : null}
-      {messages.map((m) => {
+      {deferredMessages.map((m) => {
         if (m.role === "assistant" && m.content === "" && isSending) {
           return null;
         }

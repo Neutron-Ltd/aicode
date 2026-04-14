@@ -6,6 +6,7 @@ import { POSTHOG_API_KEY, POSTHOG_HOST } from "./config";
 const DISTINCT_KEY = "buildUltra.posthogDistinctId";
 
 let client: PostHog | null = null;
+let telemetryDistinctId: string | null = null;
 
 /**
  * PostHog for the extension host. Disabled when `POSTHOG_API_KEY` is empty.
@@ -23,8 +24,26 @@ export function initExtensionTelemetry(context: vscode.ExtensionContext): void {
     void context.globalState.update(DISTINCT_KEY, distinctId);
   }
 
+  telemetryDistinctId = distinctId;
   client = new PostHog(key, { host: POSTHOG_HOST.trim() || "https://us.i.posthog.com" });
   client.capture({ distinctId, event: "extension_activated" });
+}
+
+/**
+ * Product analytics (opt-in). No-ops when PostHog is not configured.
+ */
+export function captureTelemetryEvent(
+  event: string,
+  properties?: Record<string, unknown>
+): void {
+  if (!client || !telemetryDistinctId) {
+    return;
+  }
+  client.capture({
+    distinctId: telemetryDistinctId,
+    event,
+    properties,
+  });
 }
 
 export async function shutdownExtensionTelemetry(): Promise<void> {
@@ -35,5 +54,6 @@ export async function shutdownExtensionTelemetry(): Promise<void> {
     await client.flush();
   } finally {
     client = null;
+    telemetryDistinctId = null;
   }
 }
