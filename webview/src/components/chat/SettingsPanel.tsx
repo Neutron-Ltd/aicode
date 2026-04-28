@@ -6,12 +6,15 @@ export function SettingsPanel({
   tokenQuota,
   onLogout,
   onClose,
+  showCloudQuota = true,
 }: {
   userLabel: string | null;
   userEmail: string | null;
   tokenQuota: number;
   onLogout: () => void;
   onClose: () => void;
+  /** When false (no cloud quota), omit token quota row. */
+  showCloudQuota?: boolean;
 }): React.ReactElement {
   const formatted = new Intl.NumberFormat(undefined).format(tokenQuota);
 
@@ -57,14 +60,16 @@ export function SettingsPanel({
               </p>
             ) : null}
           </div>
-          <div className="flex items-baseline justify-between gap-2 border-t pt-3" style={{ borderColor: "var(--vscode-sideBar-border, rgba(128,128,128,0.2))" }}>
-            <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--vscode-descriptionForeground)" }}>
-              Token quota
-            </span>
-            <span className="font-mono text-[12px] tabular-nums" style={{ color: "var(--vscode-sideBar-foreground)" }}>
-              {formatted}
-            </span>
-          </div>
+          {showCloudQuota ? (
+            <div className="flex items-baseline justify-between gap-2 border-t pt-3" style={{ borderColor: "var(--vscode-sideBar-border, rgba(128,128,128,0.2))" }}>
+              <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--vscode-descriptionForeground)" }}>
+                Token quota
+              </span>
+              <span className="font-mono text-[12px] tabular-nums" style={{ color: "var(--vscode-sideBar-foreground)" }}>
+                {formatted}
+              </span>
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={() => {

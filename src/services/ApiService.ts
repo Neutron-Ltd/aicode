@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
 import { openMutationDiffAndConfirm } from "../diffReview";
+import { streamOpenAiCompatibleSse } from "../openAiCompatibleStream";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
+import type { BuildUltraSettings } from "../buildUltraSettings";
+import { assembleChatMessages } from "../chatPrompt/assembleMessages";
+import { buildWorkstationChatRequestBody } from "../chatPrompt/workstationRequest";
 import type { ChatPayload } from "../types/chatPayload";
 import type { HostToWebviewMessage } from "../shared/messages";
 import { buildToolPlanSteps } from "../toolPlanParse";
@@ -22,8 +26,10 @@ type SseJson = {
 type Conv = NonNullable<ChatPayload["conversationOverride"]>;
 
 /**
- * Calls the Supabase `chat` Edge Function with the user JWT and streams SSE deltas
- * to the webview (Chunk 6).
+ * **Cloud:** calls the Supabase `chat` Edge Function with the user JWT and streams SSE to the webview.
+ *
+ * **Workstation:** POSTs OpenAI-compatible chat completions to the configured private compute base URL;
+ * tools and prompts are assembled in the extension (`src/chatPrompt/`).
  *
  * **Request:** `POST /functions/v1/chat` with JSON body = `ChatPayload` (see `chatPayload.ts`).
  *
@@ -31,13 +37,13 @@ type Conv = NonNullable<ChatPayload["conversationOverride"]>;
  * `data: {"delta":"..."}\n\n` — append `delta` to the assistant message. Optional terminal
  * event: `data: [DONE]\n\n`. Lines may include `{ "error": "..." }` to signal failure.
  * Tool rounds emit `data: {"tool_calls":[...]}\n\n` before `[DONE]`.
- *
- * Upstream API keys stay **only** in the Edge Function env — never in the extension.
+ * Upstream API keys for **Cloud** stay in Edge env. **Workstation** uses the compute API key from Secret Storage.
  */
 export class ApiService {
   private readonly planResolvers = new Map<string, (ok: boolean) => void>();
 
   constructor(
+    private readonly settings: BuildUltraSettings,
     private readonly auth: AuthService,
     private readonly promptBuilder: PromptBuilderService,
     private readonly tools: ToolExecutionService,
@@ -60,6 +66,39 @@ export class ApiService {
     return new Promise((resolve) => {
       this.planResolvers.set(planId, resolve);
     });
+  }
+
+  private toolCallSummary(tc: ToolCallWire): { tool: string; path?: string } {
+    const tool = tc.function.name;
+    let path: string | undefined;
+    try {
+      const args = JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
+      if (typeof args.path === "string") {
+        path = args.path;
+      }
+    } catch {
+      /* ignore */
+    }
+    return { tool, path };
+  }
+
+  private progressLineForTool(tc: ToolCallWire): string {
+    const { tool, path } = this.toolCallSummary(tc);
+    if (path) {
+      return `Ultra AI is running \`${tool}\` on \`${path}\`…`;
+    }
+    return `Ultra AI is running \`${tool}\`…`;
+  }
+
+  private postMutationProgress(line: string, diffAwaiting = false): void {
+    this.postToWebview({
+      type: "MUTATION_PROGRESS",
+      payload: { line, diffAwaiting },
+    });
+  }
+
+  private clearMutationProgress(): void {
+    this.postMutationProgress("", false);
   }
 
   /**
@@ -97,6 +136,11 @@ export class ApiService {
         ? (args.range as { startLine?: number; endLine?: number } | undefined)
         : undefined;
 
+    this.postMutationProgress(
+      `Review diff for "${rel || "(file)"}" — a compare view opens in VS Code. Use Apply or Skip in the dialog.`,
+      true
+    );
+
     const confirmed = await openMutationDiffAndConfirm({
       provider: this.previewProvider,
       title: "Ultra AI",
@@ -116,6 +160,11 @@ export class ApiService {
   }
 
   async sendChatMessage(query: string, modelId: string): Promise<void> {
+    if (this.settings.isWorkstation()) {
+      await this.sendWorkstationChatMessage(query, modelId);
+      return;
+    }
+
     const url = SUPABASE_URL.trim();
     const anonKey = SUPABASE_ANON_KEY.trim();
     if (!url || !anonKey) {
@@ -221,12 +270,15 @@ export class ApiService {
         this.postToWebview({ type: "TOOL_PLAN_CLEARED", payload: { planId } });
 
         if (!planConfirmed) {
+          this.clearMutationProgress();
           break;
         }
 
         const expectedVersions = new Map<string, number>();
         const toolMsgs: Conv = [];
+        this.postMutationProgress("Running approved tools…");
         for (const tc of toolCalls) {
+          this.postMutationProgress(this.progressLineForTool(tc));
           const result = await this.maybeConfirmThenExecute(tc, expectedVersions);
           toolMsgs.push({
             role: "tool",
@@ -235,6 +287,7 @@ export class ApiService {
             name: result.name,
           });
         }
+        this.clearMutationProgress();
 
         if (!conversationOverride?.length) {
           conversationOverride = [
@@ -261,7 +314,360 @@ export class ApiService {
     }
   }
 
+  private async getRemainingQuotaForUser(): Promise<number> {
+    const client = this.auth.getSupabaseClient();
+    if (!client) {
+      return 0;
+    }
+    const {
+      data: { session },
+    } = await client.auth.getSession();
+    const uid = session?.user?.id;
+    if (!uid) {
+      return 0;
+    }
+    const { data, error } = await client
+      .from("user_quotas")
+      .select("tokens_used, total_quota")
+      .eq("id", uid)
+      .maybeSingle();
+    if (error || !data) {
+      return 0;
+    }
+    const tokensUsed = typeof data.tokens_used === "number" ? data.tokens_used : 0;
+    const totalQuota = typeof data.total_quota === "number" ? data.total_quota : 0;
+    return Math.max(0, totalQuota - tokensUsed);
+  }
+
+  /**
+   * POST SaaS usage after a full Workstation (private compute) turn.
+   */
+  private async postWorkstationLogUsage(totalTokens: number): Promise<void> {
+    const url = SUPABASE_URL.trim();
+    const anonKey = SUPABASE_ANON_KEY.trim();
+    const token = await this.auth.getSessionAccessToken();
+    if (!url || !anonKey || !token) {
+      return;
+    }
+    const deduct = Math.max(1, Math.floor(totalTokens));
+    try {
+      const r = await fetch(`${url.replace(/\/$/, "")}/functions/v1/log-usage`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: anonKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ total_tokens: deduct }),
+      });
+      if (r.status === 402) {
+        this.postToWebview({ type: "UPDATE_QUOTA", payload: { remaining: 0 } });
+        this.postChatError("Your token quota is exhausted.");
+        return;
+      }
+      if (!r.ok) {
+        this.postChatError(
+          "Ultra AI could not record usage. Your message still ran on compute."
+        );
+        return;
+      }
+      const j = (await r.json()) as { remaining_tokens?: unknown };
+      if (typeof j.remaining_tokens === "number" && Number.isFinite(j.remaining_tokens)) {
+        this.postToWebview({
+          type: "UPDATE_QUOTA",
+          payload: { remaining: Math.max(0, Math.floor(j.remaining_tokens)) },
+        });
+      }
+    } catch {
+      this.postChatError(
+        "Ultra AI could not record usage. Check your connection."
+      );
+    }
+  }
+
+  private async sendWorkstationChatMessage(
+    query: string,
+    modelId: string
+  ): Promise<void> {
+    const url = SUPABASE_URL.trim();
+    const anonKey = SUPABASE_ANON_KEY.trim();
+    if (!url || !anonKey) {
+      this.postChatError(
+        "Build Ultra is not configured. Backend URL and key are missing in the extension build."
+      );
+      return;
+    }
+    if (!this.auth.getSupabaseClient()) {
+      this.postChatError("Build Ultra client not configured.");
+      return;
+    }
+    if (!(await this.auth.getSessionAccessToken())) {
+      this.postChatError("Sign in to use chat.");
+      return;
+    }
+
+    const remainingQuota = await this.getRemainingQuotaForUser();
+    if (remainingQuota <= 0) {
+      this.postToWebview({ type: "UPDATE_QUOTA", payload: { remaining: 0 } });
+      this.postChatError("Your token quota is exhausted.");
+      return;
+    }
+
+    const chatUrl = this.settings.getChatCompletionsUrl();
+    const apiKey = await this.settings.getWorkstationApiKey();
+
+    if (!chatUrl) {
+      this.postChatError(
+        "Ultra AI can’t reach compute. Open Settings → Build Ultra and set the compute host."
+      );
+      return;
+    }
+    if (!apiKey) {
+      this.postChatError(
+        "Ultra AI needs an API key for your configured compute. Command Palette → “Build Ultra: Set Private Compute API Key.”"
+      );
+      return;
+    }
+
+    const assistantId = `a-${Date.now()}`;
+    this.postToWebview({
+      type: "CHAT_STREAM_START",
+      payload: { id: assistantId },
+    });
+
+    let chatAborted = false;
+    let totalTurnTokens = 0;
+    try {
+      const masterSystem = await this.auth.resolveDefaultMasterPrompt();
+      let base = await this.promptBuilder.buildChatPayload(query, modelId);
+      const upstreamModel = this.settings.getEffectiveModel(modelId);
+      let conversationOverride: Conv | undefined;
+
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const payload: ChatPayload = conversationOverride?.length
+          ? {
+              ...base,
+              query: "",
+              conversationOverride,
+            }
+          : base;
+
+        const built = assembleChatMessages(masterSystem, payload, "");
+        const requestBody = buildWorkstationChatRequestBody(upstreamModel, built);
+
+        const response = await fetch(chatUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream, application/json",
+            "X-API-Key": apiKey,
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          await this.handleWorkstationHttpError(response);
+          chatAborted = true;
+          break;
+        }
+
+        const contentType = response.headers.get("content-type") ?? "";
+        let toolCalls: ToolCallWire[] = [];
+        let assistantText = "";
+        let roundUsage: number | null = null;
+        if (contentType.includes("text/event-stream")) {
+          const r = await streamOpenAiCompatibleSse(response, (delta) => {
+            this.postToWebview({
+              type: "CHAT_STREAM_DELTA",
+              payload: { id: assistantId, delta },
+            });
+          });
+          toolCalls = r.toolCalls;
+          assistantText = r.assistantText;
+          roundUsage = r.usageTotalTokens;
+        } else {
+          const nr = await this.parseOpenAiNonStreamResponse(
+            response,
+            assistantId
+          );
+          toolCalls = nr.toolCalls;
+          assistantText = nr.assistantText;
+          roundUsage = nr.usageTotalTokens;
+        }
+
+        const promptChars = JSON.stringify(requestBody).length;
+        const roundTokens =
+          roundUsage !== null && Number.isFinite(roundUsage)
+            ? Math.max(1, Math.floor(roundUsage))
+            : Math.max(1, Math.ceil((promptChars + assistantText.length) / 4));
+        totalTurnTokens += roundTokens;
+
+        if (toolCalls.length === 0) {
+          break;
+        }
+
+        base = await this.promptBuilder.refreshPayloadForToolRound(modelId, query);
+        const ctxBundle = this.promptBuilder.buildToolFollowupContextBundle(base);
+        const userQuery = query.trim();
+
+        const assistantMsg: Conv[number] = {
+          role: "assistant",
+          content: assistantText.trim() ? assistantText : null,
+          tool_calls: toolCalls,
+        };
+
+        const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const steps = buildToolPlanSteps(toolCalls);
+        this.postToWebview({
+          type: "TOOL_PLAN_PENDING",
+          payload: { planId, steps },
+        });
+
+        const planConfirmed = await this.waitForToolPlan(planId);
+        this.postToWebview({ type: "TOOL_PLAN_CLEARED", payload: { planId } });
+
+        if (!planConfirmed) {
+          this.clearMutationProgress();
+          break;
+        }
+
+        const expectedVersions = new Map<string, number>();
+        const toolMsgs: Conv = [];
+        this.postMutationProgress("Running approved tools…");
+        for (const tc of toolCalls) {
+          this.postMutationProgress(this.progressLineForTool(tc));
+          const result = await this.maybeConfirmThenExecute(tc, expectedVersions);
+          toolMsgs.push({
+            role: "tool",
+            content: result.content,
+            tool_call_id: result.tool_call_id,
+            name: result.name,
+          });
+        }
+        this.clearMutationProgress();
+
+        if (!conversationOverride?.length) {
+          conversationOverride = [
+            { role: "user", content: ctxBundle },
+            { role: "user", content: userQuery },
+            assistantMsg,
+            ...toolMsgs,
+          ];
+        } else {
+          conversationOverride = [
+            ...conversationOverride,
+            assistantMsg,
+            ...toolMsgs,
+          ];
+        }
+      }
+
+      if (!chatAborted) {
+        this.postToWebview({
+          type: "CHAT_STREAM_END",
+          payload: { id: assistantId },
+        });
+        if (totalTurnTokens > 0) {
+          await this.postWorkstationLogUsage(totalTurnTokens);
+        }
+      }
+    } catch {
+      chatAborted = true;
+      this.postChatError(
+        "Ultra AI couldn’t reach compute. Check your network and Build Ultra settings."
+      );
+    }
+  }
+
+  private async handleWorkstationHttpError(response: Response): Promise<void> {
+    await response.text().catch(() => "");
+    if (response.status === 503 || response.status === 502) {
+      this.postChatError(
+        "Service temporarily unavailable.",
+        "maintenance"
+      );
+      return;
+    }
+    if (response.status === 401 || response.status === 403) {
+      this.postChatError(
+        "Ultra AI could not authorize this request. Check your API key in settings."
+      );
+      return;
+    }
+    this.postChatError(
+      "Ultra AI couldn’t complete the request. Try again in a moment."
+    );
+  }
+
+  private async parseOpenAiNonStreamResponse(
+    response: Response,
+    assistantId: string
+  ): Promise<{
+    toolCalls: ToolCallWire[];
+    assistantText: string;
+    usageTotalTokens: number | null;
+  }> {
+    const text = await response.text();
+    let toolCalls: ToolCallWire[] = [];
+    let assistantText = "";
+    let usageTotalTokens: number | null = null;
+    try {
+      const j = JSON.parse(text) as {
+        usage?: { total_tokens?: number };
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            tool_calls?: Array<{
+              id?: string;
+              type?: string;
+              function?: { name?: string; arguments?: string };
+            }>;
+          };
+        }>;
+      };
+      if (typeof j.usage?.total_tokens === "number") {
+        usageTotalTokens = j.usage.total_tokens;
+      }
+      const msg = j.choices?.[0]?.message;
+      if (typeof msg?.content === "string" && msg.content.length > 0) {
+        assistantText = msg.content;
+        this.postToWebview({
+          type: "CHAT_STREAM_DELTA",
+          payload: { id: assistantId, delta: msg.content },
+        });
+      }
+      const tcs = msg?.tool_calls;
+      if (Array.isArray(tcs)) {
+        for (const tc of tcs) {
+          const id = typeof tc.id === "string" ? tc.id : "";
+          const name = tc.function?.name ?? "";
+          const args = tc.function?.arguments ?? "";
+          if (id && name) {
+            toolCalls.push({
+              id,
+              type: "function",
+              function: {
+                name,
+                arguments: typeof args === "string" ? args : "",
+              },
+            });
+          }
+        }
+      }
+    } catch {
+      if (text.trim()) {
+        this.postToWebview({
+          type: "CHAT_STREAM_DELTA",
+          payload: { id: assistantId, delta: text.slice(0, 20_000) },
+        });
+        assistantText = text;
+      }
+    }
+    return { toolCalls, assistantText, usageTotalTokens };
+  }
+
   private postChatError(message: string, kind?: "maintenance"): void {
+    this.clearMutationProgress();
     if (kind === "maintenance") {
       this.postToWebview({
         type: "CHAT_ERROR",
@@ -277,6 +683,11 @@ export class ApiService {
   /** Parses JSON `{ status: "maintenance" }` from Edge or falls back to generic error text. */
   private async handleChatHttpError(response: Response): Promise<void> {
     const errText = await response.text().catch(() => response.statusText);
+    if (response.status === 402) {
+      this.postToWebview({ type: "UPDATE_QUOTA", payload: { remaining: 0 } });
+      this.postChatError("Your token quota is exhausted.");
+      return;
+    }
     let message = `Chat failed (${response.status}): ${errText.slice(0, 400)}`;
     let kind: "maintenance" | undefined;
     const trimmed = errText.trim();

@@ -71,6 +71,11 @@ export class PromptBuilderService {
     const workspaceRules = await this.loadWorkspaceRules();
     const diagnosticsSummary = await this.getDiagnosticsSummaryForActiveFile();
     const terminalContext = this.terminal.getRecentTerminalContext();
+    const fileCtx = this.editor.getActiveFileContextForPrompt();
+    const fullFileText =
+      fileCtx.excerptNote && fileCtx.excerptNote.length > 0
+        ? `${fileCtx.excerptNote}\n\n${fileCtx.text}`
+        : fileCtx.text;
 
     const payload: ChatPayload = {
       query,
@@ -80,7 +85,7 @@ export class PromptBuilderService {
       terminalContext,
       editorContext: {
         fileName: this.editor.getActiveFileName(),
-        fullFileText: this.editor.getActiveDocumentText(),
+        fullFileText,
         selectedText: this.editor.getSelectedText(),
       },
     };
@@ -103,12 +108,9 @@ export class PromptBuilderService {
     return [
       "## Context bundle (not the user question)",
       "",
-      rulesBlock,
-      "",
       diag,
       "",
-      "## Indexed codebase (RAG)",
-      RAG_OMITTED_NOTE,
+      rulesBlock,
       "",
       "## Editor",
       `- Active file: ${fileName ?? "(none)"}`,
@@ -119,6 +121,9 @@ export class PromptBuilderService {
       "```text",
       fullFileText ?? "",
       "```",
+      "",
+      "## Indexed codebase (RAG)",
+      RAG_OMITTED_NOTE,
       "",
       "## Terminal",
       terminalContext?.combinedText?.trim()

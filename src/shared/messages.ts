@@ -14,13 +14,21 @@ export type WebviewToHostMessage =
   | { type: "INSERT_CODE"; payload: { code: string } }
   | { type: "LOGOUT_REQUEST" }
   | { type: "TOOL_PLAN_CONFIRM"; payload: { planId: string } }
-  | { type: "TOOL_PLAN_CANCEL"; payload: { planId: string } };
+  | { type: "TOOL_PLAN_CANCEL"; payload: { planId: string } }
+  | { type: "REQUEST_RUNTIME_SYNC" }
+  /** Bring keyboard focus to editor / diff area (mutation review). */
+  | { type: "FOCUS_EDITOR_GROUPS" };
 
 export type HostToWebviewMessage =
   | { type: "PONG"; payload: { ts: number; clientTs?: number } }
   | {
       type: "LOGIN_SUCCESS";
-      payload: { displayName: string; email?: string };
+      payload: {
+        displayName: string;
+        email?: string;
+        /** Remaining SaaS token quota after RLS read of `user_quotas`. */
+        tokenQuotaRemaining: number;
+      };
     }
   | { type: "AUTH_ERROR"; payload: { message: string } }
   | { type: "UPDATE_QUOTA"; payload: { remaining: number } }
@@ -58,7 +66,27 @@ export type HostToWebviewMessage =
       };
     }
   /** Host cleared the plan banner (confirmed path or cancelled). */
-  | { type: "TOOL_PLAN_CLEARED"; payload: { planId: string } };
+  | { type: "TOOL_PLAN_CLEARED"; payload: { planId: string } }
+  /** Live line during autonomous tool execution; empty `line` clears the banner. */
+  | {
+      type: "MUTATION_PROGRESS";
+      payload: { line: string; diffAwaiting?: boolean };
+    }
+  | {
+      type: "RUNTIME_CONFIG";
+      payload: {
+        mode: "Cloud" | "Workstation";
+      };
+    }
+  | {
+      type: "WORKSTATION_STATUS";
+      payload: {
+        online: boolean;
+        checkedAt: number;
+        /** User-safe hint when `online` is false (no raw host/API details). */
+        hint?: "configure" | "unreachable" | "denied";
+      };
+    };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -129,6 +157,10 @@ export function parseWebviewMessage(raw: unknown): WebviewToHostMessage | null {
       if (typeof planId !== "string") return null;
       return { type: "TOOL_PLAN_CANCEL", payload: { planId } };
     }
+    case "REQUEST_RUNTIME_SYNC":
+      return { type: "REQUEST_RUNTIME_SYNC" };
+    case "FOCUS_EDITOR_GROUPS":
+      return { type: "FOCUS_EDITOR_GROUPS" };
     default:
       return null;
   }
@@ -156,7 +188,14 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       if (typeof displayName !== "string") return null;
       let email: string | undefined;
       if (typeof p.email === "string") email = p.email;
-      return { type: "LOGIN_SUCCESS", payload: { displayName, email } };
+      let tokenQuotaRemaining = 0;
+      if (typeof p.tokenQuotaRemaining === "number" && Number.isFinite(p.tokenQuotaRemaining)) {
+        tokenQuotaRemaining = Math.max(0, Math.floor(p.tokenQuotaRemaining));
+      }
+      return {
+        type: "LOGIN_SUCCESS",
+        payload: { displayName, email, tokenQuotaRemaining },
+      };
     }
     case "AUTH_ERROR": {
       const p = raw.payload;
@@ -268,6 +307,37 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       const planId = p.planId;
       if (typeof planId !== "string") return null;
       return { type: "TOOL_PLAN_CLEARED", payload: { planId } };
+    }
+    case "MUTATION_PROGRESS": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const line = p.line;
+      if (typeof line !== "string") return null;
+      const diffAwaiting = p.diffAwaiting === true;
+      return { type: "MUTATION_PROGRESS", payload: { line, diffAwaiting } };
+    }
+    case "RUNTIME_CONFIG": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const mode = p.mode;
+      if (mode !== "Cloud" && mode !== "Workstation") return null;
+      return { type: "RUNTIME_CONFIG", payload: { mode } };
+    }
+    case "WORKSTATION_STATUS": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const online = p.online;
+      const checkedAt = p.checkedAt;
+      if (typeof online !== "boolean" || typeof checkedAt !== "number") return null;
+      const rawHint = p.hint;
+      let hint: "configure" | "unreachable" | "denied" | undefined;
+      if (rawHint === "configure" || rawHint === "unreachable" || rawHint === "denied") {
+        hint = rawHint;
+      }
+      return {
+        type: "WORKSTATION_STATUS",
+        payload: { online, checkedAt, hint },
+      };
     }
     default:
       return null;

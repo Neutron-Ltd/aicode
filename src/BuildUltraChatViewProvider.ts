@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { BuildUltraSettings } from "./buildUltraSettings";
 import type { ApiService } from "./services/ApiService";
 import type { AuthService } from "./services/AuthService";
 import type { EditorService } from "./services/EditorService";
@@ -28,7 +29,103 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
   private _api: ApiService | undefined;
   private _workspaceScanner: WorkspaceScannerService | undefined;
 
-  constructor(private readonly _context: vscode.ExtensionContext) {}
+  private _workstationPoll: ReturnType<typeof setInterval> | undefined;
+
+  constructor(
+    private readonly _context: vscode.ExtensionContext,
+    private readonly _ultraSettings: BuildUltraSettings
+  ) {}
+
+  /** Post RUNTIME_CONFIG + optional workstation heartbeat; repeat on config changes. */
+  refreshRuntimeAndWorkstationStatus(): void {
+    void this.refreshRuntimeBootstrap();
+  }
+
+  private async refreshRuntimeBootstrap(): Promise<void> {
+    const w = this._webview;
+    if (!w) return;
+
+    void w.postMessage({
+      type: "RUNTIME_CONFIG",
+      payload: { mode: this._ultraSettings.getMode() },
+    });
+
+    if (this._ultraSettings.isWorkstation()) {
+      await this.pingWorkstationStatus();
+      this.startWorkstationPoll();
+    } else {
+      if (this._workstationPoll) {
+        clearInterval(this._workstationPoll);
+        this._workstationPoll = undefined;
+      }
+    }
+  }
+
+  private startWorkstationPoll(): void {
+    if (this._workstationPoll) {
+      clearInterval(this._workstationPoll);
+    }
+    this._workstationPoll = setInterval(() => {
+      void this.pingWorkstationStatus();
+    }, 30_000);
+  }
+
+  /** Reachability check for private compute (`/v1/models`); posts sanitized status to webview. */
+  private async pingWorkstationStatus(): Promise<void> {
+    const w = this._webview;
+    if (!w) return;
+
+    if (!this._ultraSettings.isWorkstation()) {
+      void w.postMessage({
+        type: "WORKSTATION_STATUS",
+        payload: {
+          online: false,
+          checkedAt: Date.now(),
+        },
+      });
+      return;
+    }
+
+    const url = this._ultraSettings.getModelsUrl();
+    const checkedAt = Date.now();
+    if (!url) {
+      void w.postMessage({
+        type: "WORKSTATION_STATUS",
+        payload: {
+          online: false,
+          checkedAt,
+          hint: "configure",
+        },
+      });
+      return;
+    }
+
+    const key = await this._ultraSettings.getWorkstationApiKey();
+    try {
+      const r = await fetch(url, {
+        method: "GET",
+        headers: key.length > 0 ? { "X-API-Key": key } : {},
+      });
+      const denied = r.status === 401 || r.status === 403;
+      void w.postMessage({
+        type: "WORKSTATION_STATUS",
+        payload: {
+          online: r.ok,
+          checkedAt,
+          hint: r.ok ? undefined : denied ? "denied" : "unreachable",
+        },
+      });
+    } catch {
+      void w.postMessage({
+        type: "WORKSTATION_STATUS",
+        payload: {
+          online: false,
+          checkedAt,
+          hint: "unreachable",
+        },
+      });
+    }
+  }
 
   /** Wired after construction so AuthService can post via this method. */
   setAuthService(auth: AuthService): void {
@@ -99,6 +196,8 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
       })
     );
 
+    void this.refreshRuntimeBootstrap();
+
     void this._auth?.tryRestoreSession();
   }
 
@@ -115,6 +214,9 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
             clientTs: msg.payload.clientTs,
           },
         });
+        break;
+      case "REQUEST_RUNTIME_SYNC":
+        void this.refreshRuntimeBootstrap();
         break;
       case "REQUIRE_LOGIN":
         void this._auth?.startOAuthLogin();
@@ -177,6 +279,9 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
         this._api?.handleToolPlanResolution(msg.payload.planId, false);
         break;
       }
+      case "FOCUS_EDITOR_GROUPS":
+        void vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+        break;
       case "INSERT_CODE":
         void this._insertCodeAtCursor(msg.payload.code);
         break;

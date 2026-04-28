@@ -4,6 +4,10 @@
  * Receives workspace chunks from the extension host, generates embeddings via a
  * backend-owned OpenAI-compatible embeddings endpoint (URL from env). The gateway may proxy to
  * vendor-specific APIs; request bodies use the OpenAI embeddings shape unless extended later.
+ *
+ * Body: `{ chunks?, reindex?: "full" | "incremental", incremental_for_paths?: string[] }`
+ * — `reindex` defaults to `"full"`. Incremental updates delete prior `file_path#chunk-*` rows
+ * for touched paths only, then insert new embeddings.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
@@ -61,6 +65,18 @@ function isValidChunk(v: unknown): v is ChunkInput {
   );
 }
 
+function normalizeLogicalPath(raw: string): string {
+  const t = raw.trim().replace(/\\/g, "/");
+  const hash = t.indexOf("#chunk-");
+  return hash >= 0 ? t.slice(0, hash) : t;
+}
+
+/** PostgreSQL LIKE: literal `%`, `_`, and `\` inside logical path segments. */
+function likePatternChunkPrefix(logicalPath: string): string {
+  const p = logicalPath.replace(/\\/g, "\\\\").replace(/%/g, "[%]").replace(/_/g, "[_]");
+  return `${p}#chunk-%`;
+}
+
 function batchArray<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -72,7 +88,7 @@ function batchArray<T>(items: T[], size: number): T[][] {
 async function embedBatch(
   embeddingsUrl: string,
   apiKey: string,
-  batch: ChunkInput[]
+  batch: ChunkInput[],
 ): Promise<number[][]> {
   const response = await fetch(embeddingsUrl, {
     method: "POST",
@@ -97,13 +113,13 @@ async function embedBatch(
   const vectors = (parsed.data ?? []).map((d) => d.embedding ?? []);
   if (vectors.length !== batch.length) {
     throw new Error(
-      `Embedding count mismatch: got ${vectors.length}, expected ${batch.length}.`
+      `Embedding count mismatch: got ${vectors.length}, expected ${batch.length}.`,
     );
   }
   for (const vec of vectors) {
     if (!Array.isArray(vec) || vec.length !== EXPECTED_DIM) {
       throw new Error(
-        `Invalid embedding dimension: expected ${EXPECTED_DIM}, got ${vec.length}.`
+        `Invalid embedding dimension: expected ${EXPECTED_DIM}, got ${vec.length}.`,
       );
     }
   }
@@ -125,7 +141,7 @@ async function handler(req: Request): Promise<Response> {
   if (!supabaseUrl || !supabaseAnonKey) {
     return jsonResponse(
       { error: "Server misconfiguration: missing Supabase env." },
-      500
+      500,
     );
   }
   if (!embeddingsUrl) {
@@ -134,7 +150,7 @@ async function handler(req: Request): Promise<Response> {
         error:
           "BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL is not set. Use: supabase secrets set BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL=...",
       },
-      503
+      503,
     );
   }
   void resolveUpstreamPayloadFormat();
@@ -144,7 +160,7 @@ async function handler(req: Request): Promise<Response> {
         error:
           "AI_UPSTREAM_KEY is not set. Use: supabase secrets set AI_UPSTREAM_KEY=...",
       },
-      503
+      503,
     );
   }
 
@@ -169,23 +185,48 @@ async function handler(req: Request): Promise<Response> {
   } catch {
     return jsonResponse({ error: "Invalid JSON body." }, 400);
   }
-  const chunksRaw = (raw as { chunks?: unknown[] }).chunks;
-  if (!Array.isArray(chunksRaw)) {
-    return jsonResponse({ error: "Body must include `chunks` array." }, 400);
-  }
+
+  const body = raw as {
+    chunks?: unknown[];
+    reindex?: string;
+    incremental_for_paths?: unknown;
+  };
+
+  const chunksRaw = Array.isArray(body.chunks) ? body.chunks : [];
   if (chunksRaw.length > MAX_CHUNKS_PER_REQUEST) {
     return jsonResponse(
       { error: `Too many chunks. Max ${MAX_CHUNKS_PER_REQUEST} per request.` },
-      413
+      413,
     );
   }
+
+  const reindexRaw = typeof body.reindex === "string" ? body.reindex.trim() : "";
+  const mode = reindexRaw === "incremental" ? "incremental" : "full";
 
   const chunks = chunksRaw.filter(isValidChunk).map((c) => ({
     ...c,
     content: c.content.slice(0, MAX_CHUNK_CHARS),
   }));
-  if (chunks.length === 0) {
-    return jsonResponse({ received: 0, embedded: 0, inserted: 0 }, 200);
+
+  const explicitPaths: string[] = [];
+  if (Array.isArray(body.incremental_for_paths)) {
+    for (const p of body.incremental_for_paths) {
+      if (typeof p === "string" && p.trim()) {
+        explicitPaths.push(normalizeLogicalPath(p));
+      }
+    }
+  }
+
+  const pathsToTouch = new Set<string>(explicitPaths);
+  for (const c of chunks) {
+    pathsToTouch.add(normalizeLogicalPath(c.file_path));
+  }
+
+  if (mode === "incremental" && pathsToTouch.size === 0) {
+    return jsonResponse({
+      error:
+        "incremental reindex requires `incremental_for_paths` and/or at least one valid chunk with file_path.",
+    }, 400);
   }
 
   const dbClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -194,16 +235,56 @@ async function handler(req: Request): Promise<Response> {
     },
   });
 
-  // Simple de-dup strategy: clear user's existing index before full re-index.
-  const { error: clearErr } = await dbClient
-    .from("workspace_documents")
-    .delete()
-    .eq("user_id", user.id);
-  if (clearErr) {
-    return jsonResponse(
-      { error: `Failed to clear existing index: ${clearErr.message}` },
-      500
-    );
+  if (mode === "full") {
+    const { error: clearErr } = await dbClient
+      .from("workspace_documents")
+      .delete()
+      .eq("user_id", user.id);
+    if (clearErr) {
+      return jsonResponse(
+        { error: `Failed to clear existing index: ${clearErr.message}` },
+        500,
+      );
+    }
+    if (chunks.length === 0) {
+      return jsonResponse(
+        {
+          received: chunksRaw.length,
+          embedded: 0,
+          inserted: 0,
+          reindex: "full",
+          cleared: true,
+        },
+        200,
+      );
+    }
+  } else {
+    for (const logicalPath of pathsToTouch) {
+      const pattern = likePatternChunkPrefix(logicalPath);
+      const { error: delErr } = await dbClient
+        .from("workspace_documents")
+        .delete()
+        .eq("user_id", user.id)
+        .like("file_path", pattern);
+      if (delErr) {
+        return jsonResponse(
+          { error: `Failed to delete chunks for ${logicalPath}: ${delErr.message}` },
+          500,
+        );
+      }
+    }
+    if (chunks.length === 0) {
+      return jsonResponse(
+        {
+          received: chunksRaw.length,
+          embedded: 0,
+          inserted: 0,
+          reindex: "incremental",
+          paths_refreshed: [...pathsToTouch],
+        },
+        200,
+      );
+    }
   }
 
   const startedAt = Date.now();
@@ -222,8 +303,7 @@ async function handler(req: Request): Promise<Response> {
       const b = batch[i];
       rowsToInsert.push({
         user_id: user.id,
-        // keep each chunk addressable without schema changes
-        file_path: `${b.file_path}#chunk-${b.chunk_index}`,
+        file_path: `${normalizeLogicalPath(b.file_path)}#chunk-${b.chunk_index}`,
         content: b.content,
         embedding: vectors[i],
       });
@@ -236,7 +316,7 @@ async function handler(req: Request): Promise<Response> {
   if (insertErr) {
     return jsonResponse(
       { error: `Failed to persist embeddings: ${insertErr.message}` },
-      500
+      500,
     );
   }
 
@@ -246,10 +326,11 @@ async function handler(req: Request): Promise<Response> {
       embedded,
       inserted: rowsToInsert.length,
       elapsed_ms: Date.now() - startedAt,
+      reindex: mode,
+      paths_refreshed: mode === "incremental" ? [...pathsToTouch] : undefined,
     },
-    200
+    200,
   );
 }
 
 Deno.serve(handler);
-

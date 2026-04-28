@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { recordPreEditSnapshot } from "../aiUndoTelemetry";
 import { captureTelemetryEvent } from "../telemetry";
 import { isBlockedRelativePath } from "../tooling/toolPathGuards";
+import { looksBinary, MAX_TOOL_FILE_BYTES } from "../tooling/looksBinary";
 import { AsyncSerialQueue } from "./toolExecutionQueue";
 
 export type ToolCallWire = {
@@ -49,6 +50,31 @@ export class ToolExecutionService {
       return null;
     }
     return joined;
+  }
+
+  /**
+   * Validates 1-based inclusive line range for write_file; returns 0-based line indices or null.
+   */
+  private parseWriteFileRange(
+    rangeUnknown: unknown,
+    lineCount: number
+  ): { startLineIdx: number; endLineIdx: number } | null {
+    if (rangeUnknown === null || rangeUnknown === undefined || typeof rangeUnknown !== "object") {
+      return null;
+    }
+    const r = rangeUnknown as { startLine?: unknown; endLine?: unknown };
+    const sl = r.startLine;
+    const el = r.endLine;
+    if (typeof sl !== "number" || typeof el !== "number") {
+      return null;
+    }
+    if (!Number.isInteger(sl) || !Number.isInteger(el)) {
+      return null;
+    }
+    if (sl < 1 || el < sl || el > lineCount) {
+      return null;
+    }
+    return { startLineIdx: sl - 1, endLineIdx: el - 1 };
   }
 
   async executeOne(
@@ -134,6 +160,20 @@ export class ToolExecutionService {
       };
     }
     const bytes = await vscode.workspace.fs.readFile(uri);
+    if (bytes.byteLength > MAX_TOOL_FILE_BYTES) {
+      return {
+        tool_call_id: id,
+        name,
+        content: `File is larger than ${MAX_TOOL_FILE_BYTES} bytes; read a smaller region or use another approach.`,
+      };
+    }
+    if (looksBinary(bytes)) {
+      return {
+        tool_call_id: id,
+        name,
+        content: "File appears binary or non-text (skipped for safety).",
+      };
+    }
     return {
       tool_call_id: id,
       name,
@@ -171,44 +211,24 @@ export class ToolExecutionService {
       };
     }
 
-    const rangeSpec = args.range as
-      | { startLine?: number; endLine?: number }
-      | undefined;
-    const edit = new vscode.WorkspaceEdit();
-    if (
-      rangeSpec &&
-      typeof rangeSpec.startLine === "number" &&
-      typeof rangeSpec.endLine === "number"
-    ) {
-      const start = Math.max(0, rangeSpec.startLine - 1);
-      const end = Math.max(start, rangeSpec.endLine - 1);
-      const startPos = new vscode.Position(start, 0);
-      const endLine = doc.lineAt(Math.min(end, doc.lineCount - 1));
-      const endPos = new vscode.Position(end, endLine.text.length);
-      edit.replace(uri, new vscode.Range(startPos, endPos), content);
-    } else {
-      const fullRange = new vscode.Range(
-        doc.positionAt(0),
-        doc.positionAt(doc.getText().length)
-      );
-      const lineCount = doc.lineCount;
-      if (lineCount > 50) {
-        const ok = await vscode.window.showWarningMessage(
-          `Replace all ${lineCount} lines in "${rel}"?`,
-          { modal: true },
-          "Replace"
-        );
-        if (ok !== "Replace") {
-          return {
-            tool_call_id: id,
-            name,
-            content: "User declined full-file replace.",
-            aborted: "user_declined",
-          };
-        }
-      }
-      edit.replace(uri, fullRange, content);
+    const lineCount = doc.lineCount;
+    const rangeParsed = this.parseWriteFileRange(args.range, lineCount);
+    if (!rangeParsed) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          `Error: write_file requires range: { "startLine": number, "endLine": number } (1-based inclusive). ` +
+          `This file has ${lineCount} line(s). Call read_file first, then set range to the lines to replace. ` +
+          `For a whole-file rewrite use startLine: 1 and endLine: ${lineCount}.`,
+      };
     }
+    const { startLineIdx, endLineIdx } = rangeParsed;
+    const edit = new vscode.WorkspaceEdit();
+    const startPos = new vscode.Position(startLineIdx, 0);
+    const endLineObj = doc.lineAt(endLineIdx);
+    const endPos = new vscode.Position(endLineIdx, endLineObj.text.length);
+    edit.replace(uri, new vscode.Range(startPos, endPos), content);
 
     const ok = await vscode.workspace.applyEdit(edit);
     if (!ok) {

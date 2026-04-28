@@ -33,7 +33,49 @@
           "type": "webview"
         }
       ]
-    }
+    },
+    "configuration": {
+      "title": "Build Ultra",
+      "properties": {
+        "buildUltra.mode": {
+          "type": "string",
+          "enum": ["Cloud", "Workstation"],
+          "enumDescriptions": [
+            "Ultra AI runs in the cloud (hosted).",
+            "Ultra AI uses compute you configure under Build Ultra settings (advanced)."
+          ],
+          "default": "Workstation",
+          "markdownDescription": "Where Ultra AI runs its language-model requests. Stored values stay `Cloud` and `Workstation` for compatibility.",
+          "description": "Where Ultra AI runs its language-model requests (Cloud vs user-configured compute)."
+        },
+        "buildUltra.computeHost": {
+          "type": "string",
+          "default": "",
+          "description": "Host only: no http(s):// prefix and no URL path. Used when mode is not Cloud (default port 8080 is assumed)."
+        },
+        "buildUltra.localIp": {
+          "type": "string",
+          "default": "",
+          "description": "Legacy. Prefer `buildUltra.computeHost`; this setting is read only if compute host is empty."
+        },
+        "buildUltra.localModelName": {
+          "type": "string",
+          "default": "qwen2.5-coder:32b",
+          "description": "Default model id when the chat sends a generic model selection (when using user-configured compute)."
+        },
+        "buildUltra.localApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional fallback API key for user-configured compute. Prefer Command Palette: Build Ultra: Set Private Compute API Key (Secret Storage)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "buildUltra.setWorkstationApiKey",
+        "title": "Build Ultra: Set Private Compute API Key"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run build:webview",

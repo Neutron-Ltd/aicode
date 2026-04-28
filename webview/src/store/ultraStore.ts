@@ -13,8 +13,20 @@ export type PendingToolPlan = {
   }>;
 };
 
+/** Live status during approved tool execution (`MUTATION_PROGRESS` from host). */
+export type MutationProgressState = {
+  line: string;
+  diffAwaiting: boolean;
+};
+
 export interface UltraState {
   isLoggedIn: boolean;
+  /** From host `RUNTIME_CONFIG`; default matches VS Code default until first message. */
+  runtimeMode: "Cloud" | "Workstation";
+  workstationOnline: boolean;
+  workstationCheckedAt: number | null;
+  /** When private compute is offline: safe hint only (no URLs or hostnames). */
+  computeStatusHint: "configure" | "unreachable" | "denied" | null;
   userLabel: string | null;
   userEmail: string | null;
   signingIn: boolean;
@@ -28,12 +40,16 @@ export interface UltraState {
   lastPongAt: number | null;
   lastPongClientTs: number | null;
   tokenQuota: number;
+  /** False until first LOGIN_SUCCESS or UPDATE_QUOTA from host. */
+  quotaReady: boolean;
   isIndexing: boolean;
   messages: ChatMessage[];
   inputDraft: string;
   isSending: boolean;
   /** AI tool batch awaiting Confirm / Cancel in the webview. */
   pendingToolPlan: PendingToolPlan | null;
+  /** Per-tool execution line + optional diff-review hint (after plan confirmed). */
+  mutationProgress: MutationProgressState | null;
 
   applyHostMessage: (msg: HostToWebviewMessage) => void;
   setInputDraft: (v: string) => void;
@@ -50,10 +66,16 @@ export interface UltraState {
   dismissServiceMaintenance: () => void;
   confirmToolPlan: () => void;
   cancelToolPlan: () => void;
+  requestRuntimeSync: () => void;
+  focusEditorGroups: () => void;
 }
 
 export const useUltraStore = create<UltraState>((set, get) => ({
   isLoggedIn: false,
+  runtimeMode: "Workstation",
+  workstationOnline: false,
+  workstationCheckedAt: null,
+  computeStatusHint: null,
   userLabel: null,
   userEmail: null,
   signingIn: false,
@@ -63,12 +85,14 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   serviceMaintenance: false,
   lastPongAt: null,
   lastPongClientTs: null,
-  tokenQuota: 142_000,
+  tokenQuota: 0,
+  quotaReady: false,
   isIndexing: false,
   messages: [],
   inputDraft: "",
   isSending: false,
   pendingToolPlan: null,
+  mutationProgress: null,
 
   applyHostMessage: (msg: HostToWebviewMessage) => {
     switch (msg.type) {
@@ -79,6 +103,16 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             msg.payload.clientTs !== undefined ? msg.payload.clientTs : null,
         });
         break;
+      case "RUNTIME_CONFIG":
+        set({ runtimeMode: msg.payload.mode });
+        break;
+      case "WORKSTATION_STATUS":
+        set({
+          workstationOnline: msg.payload.online,
+          workstationCheckedAt: msg.payload.checkedAt,
+          computeStatusHint: msg.payload.hint ?? null,
+        });
+        break;
       case "LOGIN_SUCCESS":
         set({
           isLoggedIn: true,
@@ -87,6 +121,8 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           authError: null,
           userLabel: msg.payload.displayName,
           userEmail: msg.payload.email ?? null,
+          tokenQuota: msg.payload.tokenQuotaRemaining,
+          quotaReady: true,
         });
         break;
       case "AUTH_ERROR":
@@ -97,7 +133,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
         });
         break;
       case "UPDATE_QUOTA":
-        set({ tokenQuota: msg.payload.remaining });
+        set({ tokenQuota: msg.payload.remaining, quotaReady: true });
         break;
       case "INDEX_STARTED":
         set({ isIndexing: true, chatError: null, serviceMaintenance: false });
@@ -139,6 +175,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           ],
           chatError: null,
           serviceMaintenance: false,
+          mutationProgress: null,
         }));
         break;
       case "CHAT_STREAM_DELTA":
@@ -157,11 +194,16 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             last?.role === "assistant" &&
             (last.content ?? "").trim().length === 0;
           if (!emptyAssistant) {
-            return { isSending: false, serviceMaintenance: false };
+            return {
+              isSending: false,
+              serviceMaintenance: false,
+              mutationProgress: null,
+            };
           }
           return {
             isSending: false,
             serviceMaintenance: false,
+            mutationProgress: null,
             messages: s.messages.map((m, idx) =>
               idx === s.messages.length - 1 && m.role === "assistant"
                 ? {
@@ -189,6 +231,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
               isSending: false,
               chatError: null,
               serviceMaintenance: true,
+              mutationProgress: null,
               messages,
             };
           });
@@ -197,6 +240,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             isSending: false,
             chatError: msg.payload.message,
             serviceMaintenance: false,
+            mutationProgress: null,
           });
         }
         break;
@@ -215,6 +259,12 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           messages: [],
           inputDraft: "",
           pendingToolPlan: null,
+          mutationProgress: null,
+          workstationOnline: false,
+          workstationCheckedAt: null,
+          computeStatusHint: null,
+          tokenQuota: 0,
+          quotaReady: false,
         });
         break;
       case "TOOL_PLAN_PENDING":
@@ -223,6 +273,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             planId: msg.payload.planId,
             steps: msg.payload.steps,
           },
+          mutationProgress: null,
         });
         break;
       case "TOOL_PLAN_CLEARED":
@@ -232,6 +283,20 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             : {}
         );
         break;
+      case "MUTATION_PROGRESS": {
+        const line = msg.payload.line;
+        if (line === "") {
+          set({ mutationProgress: null });
+        } else {
+          set({
+            mutationProgress: {
+              line,
+              diffAwaiting: Boolean(msg.payload.diffAwaiting),
+            },
+          });
+        }
+        break;
+      }
     }
   },
 
@@ -268,8 +333,9 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   sendUserMessage: () => {
-    const { inputDraft, pendingToolPlan } = get();
+    const { inputDraft, pendingToolPlan, quotaReady, tokenQuota } = get();
     if (pendingToolPlan) return;
+    if (!quotaReady || tokenQuota <= 0) return;
     const text = inputDraft.trim();
     if (!text) return;
 
@@ -303,6 +369,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
       chatError: null,
       serviceMaintenance: false,
       pendingToolPlan: null,
+      mutationProgress: null,
     });
   },
 
@@ -330,5 +397,13 @@ export const useUltraStore = create<UltraState>((set, get) => ({
       type: "TOOL_PLAN_CANCEL",
       payload: { planId: plan.planId },
     });
+  },
+
+  requestRuntimeSync: () => {
+    postToHost({ type: "REQUEST_RUNTIME_SYNC" });
+  },
+
+  focusEditorGroups: () => {
+    postToHost({ type: "FOCUS_EDITOR_GROUPS" });
   },
 }));

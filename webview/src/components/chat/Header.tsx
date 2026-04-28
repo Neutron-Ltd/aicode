@@ -9,12 +9,15 @@ export function Header({
   onClearChat,
   clearChatDisabled,
   onOpenSettings,
+  indexWorkspaceDisabled = false,
 }: {
   onIndexWorkspace: () => void;
   isIndexing: boolean;
   onClearChat: () => void;
   clearChatDisabled: boolean;
   onOpenSettings: () => void;
+  /** When true (Workstation mode), indexing is unavailable. */
+  indexWorkspaceDisabled?: boolean;
 }): React.ReactElement {
   return (
     <header
@@ -55,11 +58,17 @@ export function Header({
           <button
             type="button"
             onClick={onIndexWorkspace}
-            disabled={isIndexing}
+            disabled={isIndexing || indexWorkspaceDisabled}
             aria-busy={isIndexing}
             className={iconBtn}
             style={{ color: "var(--vscode-icon-foreground, var(--vscode-foreground))" }}
-            title={isIndexing ? "Indexing workspace…" : "Index workspace for AI context (embeddings)"}
+            title={
+              indexWorkspaceDisabled
+                ? "Indexing is available in Cloud mode only (Settings → Build Ultra)"
+                : isIndexing
+                  ? "Indexing workspace…"
+                  : "Index workspace for richer Ultra AI context"
+            }
             aria-label="Index workspace"
           >
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

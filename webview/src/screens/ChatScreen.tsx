@@ -7,14 +7,17 @@ import { ChatErrorBanner } from "../components/chat/ChatErrorBanner";
 import { Header } from "../components/chat/Header";
 import { InputArea } from "../components/chat/InputArea";
 import { MessageList } from "../components/chat/MessageList";
+import { MutationBanner } from "../components/chat/MutationBanner";
 import { SettingsPanel } from "../components/chat/SettingsPanel";
 import { ToolPlanPanel } from "../components/chat/ToolPlanPanel";
+import { WorkstationConnectionFooter } from "../components/chat/WorkstationConnectionFooter";
 import { useUltraStore } from "../store/ultraStore";
 
 export function ChatScreen(): React.ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const tokenQuota = useUltraStore((s) => s.tokenQuota);
+  const quotaReady = useUltraStore((s) => s.quotaReady);
   const messages = useUltraStore((s) => s.messages);
   const inputDraft = useUltraStore((s) => s.inputDraft);
   const setInputDraft = useUltraStore((s) => s.setInputDraft);
@@ -32,9 +35,22 @@ export function ChatScreen(): React.ReactElement {
   const pendingToolPlan = useUltraStore((s) => s.pendingToolPlan);
   const confirmToolPlan = useUltraStore((s) => s.confirmToolPlan);
   const cancelToolPlan = useUltraStore((s) => s.cancelToolPlan);
+  const mutationProgress = useUltraStore((s) => s.mutationProgress);
+  const focusEditorGroups = useUltraStore((s) => s.focusEditorGroups);
+  const runtimeMode = useUltraStore((s) => s.runtimeMode);
 
   const clearChatDisabled =
     messages.length === 0 || isSending;
+
+  const inputDisabled =
+    !quotaReady || (quotaReady && tokenQuota <= 0) || isSending || !!pendingToolPlan;
+
+  const inputPlaceholder =
+    !quotaReady
+      ? "Loading quota…"
+      : tokenQuota <= 0
+        ? "Token quota exhausted."
+        : undefined;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-ultra-surface">
@@ -54,6 +70,7 @@ export function ChatScreen(): React.ReactElement {
             onClearChat={clearChat}
             clearChatDisabled={clearChatDisabled}
             onOpenSettings={() => setSettingsOpen(true)}
+            indexWorkspaceDisabled={runtimeMode === "Workstation"}
           />
           {settingsOpen ? (
             <SettingsPanel
@@ -62,6 +79,7 @@ export function ChatScreen(): React.ReactElement {
               tokenQuota={tokenQuota}
               onLogout={requestLogout}
               onClose={() => setSettingsOpen(false)}
+              showCloudQuota={true}
             />
           ) : null}
         </div>
@@ -75,6 +93,12 @@ export function ChatScreen(): React.ReactElement {
             onCancel={cancelToolPlan}
           />
         ) : null}
+        {mutationProgress ? (
+          <MutationBanner
+            progress={mutationProgress}
+            onFocusEditor={focusEditorGroups}
+          />
+        ) : null}
         <MessageList
           messages={messages}
           onApplyCode={requestInsertCode}
@@ -84,8 +108,10 @@ export function ChatScreen(): React.ReactElement {
           value={inputDraft}
           onChange={setInputDraft}
           onSend={sendUserMessage}
-          disabled={isSending || !!pendingToolPlan}
+          disabled={inputDisabled}
+          placeholder={inputPlaceholder}
         />
+        <WorkstationConnectionFooter />
       </div>
     </div>
   );

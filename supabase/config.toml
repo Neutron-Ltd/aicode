@@ -11,3 +11,6 @@ verify_jwt = false
 # JWT is validated inside the function (Bearer from the extension).
 [functions.embed]
 verify_jwt = false
+
+[functions.log-usage]
+verify_jwt = false

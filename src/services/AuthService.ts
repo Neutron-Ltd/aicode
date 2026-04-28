@@ -5,6 +5,7 @@ import {
   SUPABASE_ANON_KEY,
   SUPABASE_URL,
 } from "../config";
+import { MASTER_SYSTEM_PROMPT_FALLBACK } from "../chatPrompt/masterPrompt";
 import type { HostToWebviewMessage } from "../shared/messages";
 
 /** Must match package.json `publisher` + `name` → vscode://mirror.build-ultra/... */
@@ -88,6 +89,8 @@ export class AuthService {
   private client: SupabaseClient | null = null;
   private lastUrl = "";
   private lastKey = "";
+  /** Latest `master_prompts` row for `name=default`; cleared on logout. */
+  private masterPromptContentCache: string | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -113,6 +116,44 @@ export class AuthService {
       data: { session },
     } = await client.auth.getSession();
     return session?.access_token ?? null;
+  }
+
+  /**
+   * Same logical prompt as Cloud chat (`master_prompts` / Edge `fetchMasterSystemPrompt`).
+   * Cached for the signed-in session; not persisted across logout.
+   */
+  async resolveDefaultMasterPrompt(): Promise<string> {
+    if (this.masterPromptContentCache !== null) {
+      return this.masterPromptContentCache;
+    }
+    const client = this.getOrCreateClient();
+    if (!client) {
+      return MASTER_SYSTEM_PROMPT_FALLBACK;
+    }
+    const { data, error } = await client
+      .from("master_prompts")
+      .select("content")
+      .eq("name", "default")
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      void vscode.window.showWarningMessage(
+        `Build Ultra: Could not load master prompt.${error.message ? ` ${error.message}` : ""}`.slice(
+          0,
+          220
+        )
+      );
+    }
+    const raw =
+      data && typeof (data as { content?: unknown }).content === "string"
+        ? (data as { content: string }).content.trim()
+        : "";
+    if (raw) {
+      this.masterPromptContentCache = raw;
+      return raw;
+    }
+    return MASTER_SYSTEM_PROMPT_FALLBACK;
   }
 
   /**
@@ -151,7 +192,7 @@ export class AuthService {
       return;
     }
 
-    this.postLoginSuccess(user);
+    await this.postLoginSuccess(user);
   }
 
   /**
@@ -177,7 +218,7 @@ export class AuthService {
     }
 
     if (data.session?.user) {
-      this.postLoginSuccess(data.session.user);
+      await this.postLoginSuccess(data.session.user);
       return;
     }
 
@@ -315,7 +356,7 @@ export class AuthService {
       return;
     }
 
-    this.postLoginSuccess(user);
+    await this.postLoginSuccess(user);
   }
 
   /** If a session exists in secrets, notify webview (e.g. after reload). */
@@ -328,7 +369,7 @@ export class AuthService {
     } = await client.auth.getSession();
     if (!session?.user) return;
 
-    this.postLoginSuccess(session.user);
+    await this.postLoginSuccess(session.user);
   }
 
 
@@ -349,19 +390,50 @@ export class AuthService {
     this.client = null;
     this.lastUrl = "";
     this.lastKey = "";
+    this.masterPromptContentCache = null;
     this.postToWebview({ type: "LOGGED_OUT" });
   }
 
-  private postLoginSuccess(user: {
+  private async fetchQuotaRemaining(): Promise<number> {
+    const client = this.getOrCreateClient();
+    if (!client) {
+      return 0;
+    }
+    const {
+      data: { session },
+    } = await client.auth.getSession();
+    const uid = session?.user?.id;
+    if (!uid) {
+      return 0;
+    }
+    const { data, error } = await client
+      .from("user_quotas")
+      .select("tokens_used, total_quota")
+      .eq("id", uid)
+      .maybeSingle();
+    if (error || !data) {
+      void vscode.window.showWarningMessage(
+        `Build Ultra: Could not load token quota.${error ? ` ${error.message}` : ""}`.slice(0, 220)
+      );
+      return 0;
+    }
+    const tokensUsed = typeof data.tokens_used === "number" ? data.tokens_used : 0;
+    const totalQuota = typeof data.total_quota === "number" ? data.total_quota : 0;
+    return Math.max(0, totalQuota - tokensUsed);
+  }
+
+  private async postLoginSuccess(user: {
     email?: string | null;
     user_metadata?: Record<string, unknown>;
-  }): void {
+  }): Promise<void> {
+    const remaining = await this.fetchQuotaRemaining();
     const displayName = displayNameFromUser(user);
     this.postToWebview({
       type: "LOGIN_SUCCESS",
       payload: {
         displayName,
         email: user.email ?? undefined,
+        tokenQuotaRemaining: remaining,
       },
     });
   }

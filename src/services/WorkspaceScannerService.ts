@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import { getUltraSupabaseConfig } from "./AuthService";
 import type { AuthService } from "./AuthService";
+import type { BuildUltraSettings } from "../buildUltraSettings";
 import type { HostToWebviewMessage } from "../shared/messages";
+import { looksBinary, MAX_TOOL_FILE_BYTES } from "../tooling/looksBinary";
 
 type WorkspaceChunk = {
   file_path: string;
@@ -80,7 +82,7 @@ const BINARY_EXTENSIONS = new Set([
 
 /** Exact filenames (lowercase) to skip — e.g. `.DS_Store` has no normal extension. */
 const BINARY_EXACT_NAMES = new Set([".ds_store", "thumbs.db"]);
-const MAX_FILE_BYTES = 512_000;
+
 const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_OVERLAP = 120;
 
@@ -88,14 +90,89 @@ const DEFAULT_OVERLAP = 120;
  * Scans workspace files, chunks text content, and sends chunks to the embed Edge Function.
  */
 export class WorkspaceScannerService {
+  /** Cached ignore lines per workspace folder URI (gitignore + buildultraignore). */
+  private readonly ignorePatternCache = new Map<
+    string,
+    { patterns: string[]; loadedAt: number }
+  >();
+  private static readonly IGNORE_CACHE_MS = 60_000;
+
   constructor(
     private readonly auth: AuthService,
-    private readonly postToWebview?: (msg: HostToWebviewMessage) => void
+    private readonly postToWebview?: (msg: HostToWebviewMessage) => void,
+    private readonly ultraSettings?: BuildUltraSettings
   ) {}
+
+  /**
+   * Incremental re-embed for one saved file (Cloud mode, signed in). Silent on failure — no webview INDEX_* spam.
+   */
+  async indexDocumentOnSave(document: vscode.TextDocument): Promise<void> {
+    try {
+      if (this.ultraSettings?.isWorkstation()) {
+        return;
+      }
+      if (document.uri.scheme !== "file") {
+        return;
+      }
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (folders.length === 0) {
+        return;
+      }
+      const { url, key } = getUltraSupabaseConfig();
+      if (!url || !key) {
+        return;
+      }
+      const token = await this.auth.getSessionAccessToken();
+      if (!token) {
+        return;
+      }
+
+      const resolved = this.workspaceFolderAndRelative(document.uri);
+      if (!resolved) {
+        return;
+      }
+      const { root, rel } = resolved;
+      const relNorm = rel.replace(/\\/g, "/");
+      const name = relNorm.split("/").pop() ?? "";
+      const patterns = await this.getCachedIgnorePatterns(root);
+      if (this.isIgnored(relNorm, name, vscode.FileType.File, patterns)) {
+        return;
+      }
+
+      const chunks = await this.readAndChunkFile(root, document.uri);
+      const embedUrl = `${url.replace(/\/$/, "")}/functions/v1/embed`;
+      const response = await fetch(embedUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: key,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          reindex: "incremental",
+          chunks,
+          incremental_for_paths: [relNorm],
+        }),
+      });
+      if (!response.ok) {
+        console.warn(
+          `Build Ultra incremental index failed (HTTP ${response.status}).`
+        );
+      }
+    } catch {
+      console.warn("Build Ultra incremental index request failed.");
+    }
+  }
 
   async indexWorkspace(): Promise<{ files: number; chunks: number }> {
     this.postToWebview?.({ type: "INDEX_STARTED" });
     try {
+      if (this.ultraSettings?.isWorkstation()) {
+        throw new Error(
+          "Codebase indexing only runs in Cloud mode. Switch Build Ultra mode in Settings, then try again."
+        );
+      }
+
       const folders = vscode.workspace.workspaceFolders ?? [];
       if (folders.length === 0) {
         throw new Error("Open a workspace folder before indexing.");
@@ -143,11 +220,10 @@ export class WorkspaceScannerService {
           apikey: key,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ chunks }),
+        body: JSON.stringify({ reindex: "full", chunks }),
       });
       if (!response.ok) {
-        const detail = await response.text().catch(() => response.statusText);
-        throw new Error(`Indexing failed (${response.status}): ${detail.slice(0, 500)}`);
+        throw new Error(`Indexing failed (HTTP ${response.status}). Try again.`);
       }
 
       const result = { files, chunks: chunks.length };
@@ -158,6 +234,32 @@ export class WorkspaceScannerService {
       this.postToWebview?.({ type: "INDEX_ERROR", payload: { message } });
       throw err;
     }
+  }
+
+  private workspaceFolderAndRelative(
+    fileUri: vscode.Uri
+  ): { root: vscode.Uri; rel: string } | null {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const rel = this.relativePath(folder.uri, fileUri);
+      if (rel) {
+        return { root: folder.uri, rel };
+      }
+    }
+    return null;
+  }
+
+  private async getCachedIgnorePatterns(root: vscode.Uri): Promise<string[]> {
+    const key = root.toString();
+    const now = Date.now();
+    const hit = this.ignorePatternCache.get(key);
+    if (hit && now - hit.loadedAt < WorkspaceScannerService.IGNORE_CACHE_MS) {
+      return hit.patterns;
+    }
+    const gitIgn = await this.loadGitignorePatterns(root);
+    const ultraIgn = await this.loadBuildUltraIgnorePatterns(root);
+    const patterns = [...gitIgn, ...ultraIgn];
+    this.ignorePatternCache.set(key, { patterns, loadedAt: now });
+    return patterns;
   }
 
   private async collectFiles(
@@ -254,8 +356,8 @@ export class WorkspaceScannerService {
     file: vscode.Uri
   ): Promise<WorkspaceChunk[]> {
     const bytes = await vscode.workspace.fs.readFile(file);
-    if (bytes.byteLength > MAX_FILE_BYTES) return [];
-    if (this.looksBinary(bytes)) return [];
+    if (bytes.byteLength > MAX_TOOL_FILE_BYTES) return [];
+    if (looksBinary(bytes)) return [];
 
     const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     if (!text.trim()) return [];
@@ -263,25 +365,6 @@ export class WorkspaceScannerService {
     const filePath = this.relativePath(root, file);
     if (!filePath) return [];
     return this.chunkText(filePath, text, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP);
-  }
-
-  /**
-   * Rejects obvious binaries: NUL bytes or a high ratio of control characters
-   * in the first chunk (catches extensionless executables and corrupt reads).
-   */
-  private looksBinary(bytes: Uint8Array): boolean {
-    const maxSample = 16_384;
-    const sample = bytes.subarray(0, Math.min(bytes.length, maxSample));
-    if (sample.length === 0) return false;
-
-    let controlish = 0;
-    for (const b of sample) {
-      if (b === 0) return true;
-      if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) {
-        controlish++;
-      }
-    }
-    return controlish / sample.length > 0.3;
   }
 
   private chunkText(

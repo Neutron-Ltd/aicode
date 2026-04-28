@@ -22,7 +22,7 @@ const EMBEDDING_MODEL = "text-embedding-3-small";
 /** Avoid sending huge files on every request (tune as needed). */
 const MAX_EDITOR_FILE_CHARS = 120_000;
 
-/** Rough context budget (characters) before upstream call — RAG truncated first, then file. */
+/** Rough context budget (characters) for RAG + active file + rules — diagnostics & terminal exempt. */
 const MAX_CONTEXT_CHARS = 100_000;
 
 /** Approximate tokens from UTF-16 length (fast; aligns with PRD token window step). */
@@ -206,7 +206,7 @@ const OPENAI_TOOLS: unknown[] = [
     function: {
       name: "write_file",
       description:
-        "Replace file contents or a line range. Use range for small edits; omit range only when replacing the whole file with user consent.",
+        "Replace a contiguous line range in an existing file. You must pass range (1-based inclusive lines). For a whole-file rewrite use startLine 1 and endLine equal to the file's line count (read_file first). For brand-new paths use create_file.",
       parameters: {
         type: "object",
         properties: {
@@ -221,7 +221,7 @@ const OPENAI_TOOLS: unknown[] = [
             required: ["startLine", "endLine"],
           },
         },
-        required: ["path", "content"],
+        required: ["path", "content", "range"],
       },
     },
   },
@@ -327,31 +327,57 @@ async function fetchMasterSystemPrompt(
 }
 
 /**
- * Truncate RAG block first, then active file, to stay under approximate token budget.
+ * Prune lowest-priority context first: RAG, then active file text, then workspace rules.
  */
-function truncateContextParts(
+function truncateRagFileRules(
   codebaseContext: string,
   fileBody: string,
+  workspaceRules: string,
   maxChars: number,
-): { rag: string; file: string } {
+): { rag: string; file: string; rules: string } {
   let rag = codebaseContext.trim();
   let file = fileBody;
-  let total = rag.length + file.length;
+  let rules = workspaceRules.trim();
+  let total = rag.length + file.length + rules.length;
   if (total <= maxChars) {
-    return { rag, file };
+    return { rag, file, rules };
   }
-  const over = total - maxChars;
+
+  let over = total - maxChars;
   if (rag.length >= over) {
     rag = rag.slice(0, Math.max(0, rag.length - over)) +
       "\n\n[… RAG context truncated for token budget …]";
-    return { rag, file };
+    return { rag, file, rules };
   }
-  const remain = over - rag.length;
+  over -= rag.length;
   rag = rag.slice(0, Math.max(0, rag.length - Math.floor(rag.length * 0.5))) +
     "\n\n[… RAG truncated …]";
-  file = file.slice(0, Math.max(0, file.length - remain)) +
-    "\n\n[… active file truncated for token budget …]";
-  return { rag, file };
+  total = rag.length + file.length + rules.length;
+  if (total <= maxChars) {
+    return { rag, file, rules };
+  }
+  over = total - maxChars;
+
+  if (file.length >= over) {
+    file = file.slice(0, Math.max(0, file.length - over)) +
+      "\n\n[… active file truncated for token budget …]";
+    return { rag, file, rules };
+  }
+  over -= file.length;
+  file = file.slice(0, Math.max(0, file.length - Math.floor(file.length * 0.5))) +
+    "\n\n[… active file truncated …]";
+  total = rag.length + file.length + rules.length;
+  if (total <= maxChars) {
+    return { rag, file, rules };
+  }
+  over = total - maxChars;
+
+  if (rules.length >= over) {
+    rules = rules.slice(0, Math.max(0, rules.length - over)) + "\n\n[… rules truncated …]";
+    return { rag, file, rules };
+  }
+  rules = rules.slice(0, Math.max(0, rules.length - Math.max(over, 0))) + "\n\n[… rules truncated …]";
+  return { rag, file, rules };
 }
 
 function buildContextUserMessage(payload: ChatPayload, rag: string, fileBody: string): string {
@@ -366,12 +392,9 @@ function buildContextUserMessage(payload: ChatPayload, rag: string, fileBody: st
   return [
     "## Context bundle (not the user question)",
     "",
-    rulesBlock,
-    "",
     diag,
     "",
-    "## Indexed codebase (RAG)",
-    rag.trim() ? rag : "(no relevant chunks)",
+    rulesBlock,
     "",
     "## Editor",
     `- Active file: ${fileName ?? "(none)"}`,
@@ -382,6 +405,9 @@ function buildContextUserMessage(payload: ChatPayload, rag: string, fileBody: st
     "```text",
     fileBody,
     "```",
+    "",
+    "## Indexed codebase (RAG)",
+    rag.trim() ? rag : "(no relevant chunks)",
     "",
     "## Terminal",
     terminalContext?.combinedText?.trim()
@@ -428,13 +454,15 @@ function assembleChatMessages(
       fileBody.slice(0, MAX_EDITOR_FILE_CHARS) +
       "\n\n[... file truncated ...]";
   }
-  const { rag, file } = truncateContextParts(
+  const rulesRaw = (payload.workspaceRules ?? "").trim();
+  const { rag, file, rules } = truncateRagFileRules(
     codebaseContext,
     fileBody,
+    rulesRaw,
     MAX_CONTEXT_CHARS,
   );
   const contextPack = buildContextUserMessage(
-    { ...payload, editorContext: { ...payload.editorContext, fullFileText: file } },
+    { ...payload, workspaceRules: rules, editorContext: { ...payload.editorContext, fullFileText: file } },
     rag,
     file,
   );
