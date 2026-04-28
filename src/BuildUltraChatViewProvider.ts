@@ -216,7 +216,7 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
       case "REQUEST_RUNTIME_SYNC":
-        void this.refreshRuntimeBootstrap();
+        void this._auth?.refreshPrivateComputeFromCloud();
         break;
       case "REQUIRE_LOGIN":
         void this._auth?.startOAuthLogin();

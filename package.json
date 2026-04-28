@@ -51,7 +51,7 @@
         "buildUltra.computeHost": {
           "type": "string",
           "default": "",
-          "description": "Host only: no http(s):// prefix and no URL path. Used when mode is not Cloud (default port 8080 is assumed)."
+          "description": "Host only (no http(s)://, no path); port 8080 assumed. If empty, Workstation mode uses the host from your signed-in account (Supabase user_private_compute) when set via “Link Workstation Host to Account”."
         },
         "buildUltra.localIp": {
           "type": "string",
@@ -74,6 +74,10 @@
       {
         "command": "buildUltra.setWorkstationApiKey",
         "title": "Build Ultra: Set Private Compute API Key"
+      },
+      {
+        "command": "buildUltra.linkWorkstationHost",
+        "title": "Build Ultra: Link Workstation Host to Account"
       }
     ]
   },

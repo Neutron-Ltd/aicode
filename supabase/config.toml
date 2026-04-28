@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.log-usage]
 verify_jwt = false
+
+[functions.get-private-compute-credentials]
+verify_jwt = false

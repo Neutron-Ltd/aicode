@@ -20,7 +20,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const promptBuilder = new PromptBuilderService(editorService, terminalService);
 
   const provider = new BuildUltraChatViewProvider(context, ultraSettings);
-  const auth = new AuthService(context, (msg) => provider.postHostMessage(msg));
+  const auth = new AuthService(
+    context,
+    (msg) => provider.postHostMessage(msg),
+    ultraSettings,
+    () => provider.refreshRuntimeAndWorkstationStatus()
+  );
   const toolExecution = new ToolExecutionService(
     () => vscode.workspace.workspaceFolders?.[0]?.uri ?? null
   );
@@ -79,6 +84,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("buildUltra.setWorkstationApiKey", () =>
       ultraSettings.promptAndStorePrivateComputeApiKey()
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("buildUltra.linkWorkstationHost", () =>
+      void auth.linkPrivateComputeToAccount()
     )
   );
 

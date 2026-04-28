@@ -4,6 +4,9 @@ export const WORKSTATION_API_KEY_SECRET = "buildUltra.workstationApiKey";
 
 const CONFIG_SECTION = "buildUltra";
 
+const CLOUD_COMPUTE_HOST_KEY = "buildUltra.cloudPrivateCompute.host";
+const CLOUD_DEFAULT_MODEL_KEY = "buildUltra.cloudPrivateCompute.defaultModel";
+
 export type UltraRunMode = "Cloud" | "Workstation";
 
 export class BuildUltraSettings {
@@ -22,13 +25,44 @@ export class BuildUltraSettings {
     return this.getMode() === "Workstation";
   }
 
-  /** Host segment only; prefers `computeHost`, then legacy `localIp`. */
+  /** Persisted after Supabase sync; cleared on logout. */
+  async setCloudPrivateComputeCache(
+    computeHost: string | null,
+    defaultModel: string | null
+  ): Promise<void> {
+    await this.context.globalState.update(
+      CLOUD_COMPUTE_HOST_KEY,
+      computeHost?.trim() ?? ""
+    );
+    await this.context.globalState.update(
+      CLOUD_DEFAULT_MODEL_KEY,
+      defaultModel?.trim() ?? ""
+    );
+  }
+
+  async clearCloudPrivateComputeCache(): Promise<void> {
+    await this.setCloudPrivateComputeCache(null, null);
+  }
+
+  private getCloudComputeHostRaw(): string {
+    return (this.context.globalState.get<string>(CLOUD_COMPUTE_HOST_KEY) ?? "").trim();
+  }
+
+  private getCloudDefaultModelRaw(): string {
+    return (this.context.globalState.get<string>(CLOUD_DEFAULT_MODEL_KEY) ?? "").trim();
+  }
+
+  /** Host segment only; VS Code settings override account-linked host. */
   private getConfiguredComputeHost(): string {
     const preferred = this.conf.get<string>("computeHost")?.trim() ?? "";
     if (preferred) {
       return preferred;
     }
-    return this.conf.get<string>("localIp")?.trim() ?? "";
+    const legacy = this.conf.get<string>("localIp")?.trim() ?? "";
+    if (legacy) {
+      return legacy;
+    }
+    return this.getCloudComputeHostRaw();
   }
 
   /** Base `http://host:8080` — no trailing slash. */
@@ -52,7 +86,25 @@ export class BuildUltraSettings {
   }
 
   getLocalModelName(): string {
-    return this.conf.get<string>("localModelName")?.trim() || "qwen2.5-coder:32b";
+    const ins = this.conf.inspect<string>("localModelName");
+    if (ins?.workspaceValue !== undefined && ins.workspaceValue !== null) {
+      const v = String(ins.workspaceValue).trim();
+      if (v.length > 0) {
+        return v;
+      }
+    }
+    if (ins?.globalValue !== undefined && ins.globalValue !== null) {
+      const v = String(ins.globalValue).trim();
+      if (v.length > 0) {
+        return v;
+      }
+    }
+    const cloud = this.getCloudDefaultModelRaw();
+    if (cloud.length > 0) {
+      return cloud;
+    }
+    const def = ins?.defaultValue;
+    return typeof def === "string" && def.trim().length > 0 ? def.trim() : "qwen2.5-coder:32b";
   }
 
   /**
@@ -73,7 +125,8 @@ export class BuildUltraSettings {
   async promptAndStorePrivateComputeApiKey(): Promise<void> {
     const value = await vscode.window.showInputBox({
       title: "Build Ultra — Private compute API key",
-      prompt: "Stored securely. Sent as X-API-Key to your configured compute endpoint.",
+      prompt:
+        "Stored securely. Sent as X-API-Key to your compute endpoint. If your account has compute_api_key in Supabase, sign-in sync overwrites this.",
       password: true,
       ignoreFocusOut: true,
     });

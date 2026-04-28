@@ -132,4 +132,109 @@ Items to **delete, replace, or narrow** so the codebase matches the PRD and avoi
 
 ---
 
+## 8. Workstation operator checklist (private compute)
+
+The extension’s **Workstation** mode talks to **OpenAI-compatible** HTTP endpoints on **`http://{computeHost}:8080`** (see [`buildUltraSettings.getLocalBaseUrl`](src/buildUltraSettings.ts): `/v1/models` for reachability, `/v1/chat/completions` for chat). It sends **`X-API-Key`** from VS Code Secret Storage (after sync from the account or manual entry). **Host**, **default model**, and optionally **`compute_api_key`** live in Supabase **`user_private_compute`**, merged with local settings—**`buildUltra.computeHost` / `localIp` still override** the account host when non-empty. After sign-in (and on runtime sync), the extension calls Edge **`get-private-compute-credentials`** when deployed, or reads the same row directly; if the account has **`compute_api_key`**, it is copied into Secret Storage so users need not run **Set Private Compute API Key**. **Logout clears** that secret so a shared machine does not keep the previous user’s key.
+
+### 8.1 Already completed (example baseline)
+
+These steps are **done** on a reference workstation; adjust to your environment.
+
+- ✅ **OS packages updated** — `apt update` / `upgrade`.
+- ✅ **NVIDIA Container Toolkit** — Installed; Docker restarted (for future containerized inference if you use it).
+- ✅ **Ollama** — Installed; models pulled (e.g. `qwen2.5-coder:32b`, `deepseek-v2:lite`, `llama3.1:8b`, `mistral-small`).
+
+### 8.2 Operator checklist (compute host + dev machine)
+
+**VS Code (Workstation mode)** — Apply migrations through [`20260428200000_user_private_compute_api_key.sql`](supabase/migrations/20260428200000_user_private_compute_api_key.sql). Deploy the Edge function: **`supabase functions deploy get-private-compute-credentials`** (see [`supabase/config.toml`](supabase/config.toml)). Operators can set **`compute_host`**, **`default_model`**, and **`compute_api_key`** in `user_private_compute` per user (Table Editor, service-role script, or onboarding); RLS restricts each row to **`auth.uid()`**. After sign-in, the extension pulls credentials (preferring the function) and fills Secret Storage when **`compute_api_key`** is set—**Build Ultra: Set Private Compute API Key** is then optional. Each developer: **`buildUltra.mode`** **Workstation**, sign in, optionally **Link Workstation Host to Account**, optional local **`computeHost` / `localIp` / `localModelName`** overrides. **`curl -H "X-API-Key: …" http://{effectiveHost}:8080/v1/models`** should return **200**. **Request runtime sync** reloads account fields after cloud changes. Confirm footer **Ultra AI compute** **Ready** and **`log-usage`** updates **`user_quotas`**. Treat **`compute_api_key`** like any secret: DB backups and admin access imply risk; prefer tight RLS and rotation; for nginx **`JWT` instead of a static key**, see plan “Option B” (gateway change—not bundled here).
+
+#### A. Compute host (Ubuntu — reference: `llm-MACH`, Ubuntu 22.04, dual GPU, Ollama + nginx)
+
+- ✅ **`ollama.service`** — Enabled and **active** (`systemctl status ollama`); survives reboot.
+- ✅ **GPU** — `nvidia-smi` shows driver and GPU(s); `ollama list` includes models (e.g. **`qwen2.5-coder:32b`**).
+- ✅ **nginx on port 8080** — Listens on **`0.0.0.0:8080`**, **`proxy_pass http://127.0.0.1:11434`**. Site file e.g. **`/etc/nginx/sites-available/build-ultra-ollama`** symlinked under **`sites-enabled`**; default **`default`** site removed if it blocked nginx (port 80 in use).
+- ✅ **`X-API-Key` enforcement** — nginx rejects missing/wrong key with **403**; correct header matches the secret you will store in the extension (Secret Storage).
+- ✅ **Local smoke tests** — `curl --noproxy '*'` to **`http://127.0.0.1:8080/v1/models`** and **`/v1/chat/completions`** with **`X-API-Key`** returns **200** and valid JSON.
+- ⚠️ **`http_proxy`** — If the shell exports a proxy, use **`curl --noproxy '*'`** (or **`NO_PROXY`**) for **`127.0.0.1`**, or localhost requests may fail silently.
+- ⚠️ **Firewall** — When **`ufw`** is active, allow **`8080/tcp`** to the LAN; keep **8080** off the public internet.
+
+#### B. Security hygiene
+
+- ⚠️ **Rotate** leaked keys: update nginx, **`user_private_compute.compute_api_key`** (if used), redeploy or re-sync; clear affected users’ VS Code secret via logout or **Set Private Compute API Key**; **`sudo nginx -t && sudo systemctl reload nginx`**.
+
+### 8.3 Optional later
+
+- ⚠️ **Containerized vLLM or other engine** — Use the NVIDIA Container Toolkit path if you outgrow Ollama for throughput; keep the **same** external URL shape (**8080**, **`/v1/*`**, **`X-API-Key`** contract) or adjust your deployment docs accordingly.
+- ⚠️ **Ollama tuning** — Context length, concurrent requests, and GPU layers per model—tune for latency and VRAM on your hardware.
+
+---
+
+## 8. Workstation operator checklist (private compute)
+
+The extension’s **Workstation** mode talks to **OpenAI-compatible** HTTP endpoints on **`http://{computeHost}:8080`** (see `buildUltraSettings.getLocalBaseUrl`: `/v1/models` for reachability, `/v1/chat/completions` for chat). It sends the **`X-API-Key`** header from Secret Storage / settings.
+
+### 8.1 Already completed (example baseline)
+
+These steps are **done** on a reference workstation; adjust to your environment.
+
+- [x] OS packages updated (`apt update` / `upgrade`).
+- [x] **NVIDIA Container Toolkit** installed; Docker restarted (for future containerized inference if you use it).
+- [x] **Ollama** installed; models pulled (e.g. `qwen2.5-coder:32b`, `deepseek-v2:lite`, `llama3.1:8b`, `mistral-small`).
+
+### 8.2 Remaining tasks (do next)
+
+- [ ] **Run Ollama as a service** — Ensure `ollama serve` runs after reboot (e.g. verify the `ollama` systemd unit is enabled and active, or your chosen process manager).
+- [ ] **Confirm GPU visibility** — Run `nvidia-smi` and, when loading a model, confirm VRAM usage behaves as expected for your chosen default model.
+- [ ] **Expose port 8080 compatible with the extension** — The extension **always** appends **`:8080`** to `buildUltra.computeHost` (host/name only, no port in that setting). Either:
+  - [ ] Put **nginx** (or another reverse proxy) on **8080**, forward to Ollama’s API (typically **`127.0.0.1:11434`**), and enforce or inject **`X-API-Key`** as your policy requires; **or**
+  - [ ] Run a small OpenAI-compatible gateway on **8080** that fronts Ollama and accepts **`X-API-Key`**.
+- [ ] **Validate the API** — From another machine or via curl on the host:
+  - [ ] `GET http://{host}:8080/v1/models` returns **200** when the same key the extension will use is supplied (if your gateway requires it).
+  - [ ] `POST http://{host}:8080/v1/chat/completions` streams or returns a normal completion for a tiny test payload.
+- [ ] **Align default model name** — Set **`buildUltra.localModelName`** in VS Code to the Ollama model id the gateway forwards (defaults in code include `qwen2.5-coder:32b`; must match what the upstream serves).
+- [ ] **Network & security** — Restrict **8080** to trusted clients (firewall / VPN / bind to localhost + SSH tunnel). **Do not** expose an unauthenticated inference endpoint to the public internet.
+- [ ] **VS Code / Build Ultra** — Set mode to **Workstation**, set **`buildUltra.computeHost`** to the reachable host (**no** `http://` or path), run **Build Ultra: Set Private Compute API Key** so **`X-API-Key`** matches the gateway.
+- [ ] **End-to-end test** — Open Ultra AI chat, confirm the footer shows **Ultra AI compute** **Ready**, send a short prompt, and confirm tool rounds behave if you use coding models.
+
+Optional later:
+
+- [ ] **Containerized vLLM or other engine** — Use the NVIDIA Container Toolkit path if you outgrow Ollama for throughput; keep the **same** external URL shape (**8080**, **`/v1/*`**, **`X-API-Key`** contract) or adjust your deployment docs accordingly.
+- [ ] **Ollama tuning** — Context length, concurrent requests, and GPU layers per model—tune for latency and VRAM on your hardware.
+
+---
+
+## 8. Workstation operator checklist (private compute)
+
+The extension’s **Workstation** mode talks to **OpenAI-compatible** HTTP endpoints on **`http://{computeHost}:8080`** (see `buildUltraSettings.getLocalBaseUrl`: `/v1/models` for reachability, `/v1/chat/completions` for chat). It sends the **`X-API-Key`** header from Secret Storage / settings.
+
+### 8.1 Already completed (example baseline)
+
+These steps are **done** on a reference workstation; adjust to your environment.
+
+- [x] OS packages updated (`apt update` / `upgrade`).
+- [x] **NVIDIA Container Toolkit** installed; Docker restarted (for future containerized inference if you use it).
+- [x] **Ollama** installed; models pulled (e.g. `qwen2.5-coder:32b`, `deepseek-v2:lite`, `llama3.1:8b`, `mistral-small`).
+
+### 8.2 Remaining tasks (do next)
+
+- [ ] **Run Ollama as a service** — Ensure `ollama serve` runs after reboot (e.g. verify the `ollama` systemd unit is enabled and active, or your chosen process manager).
+- [ ] **Confirm GPU visibility** — Run `nvidia-smi` and, when loading a model, confirm VRAM usage behaves as expected for your chosen default model.
+- [ ] **Expose port 8080 compatible with the extension** — The extension **always** appends **`:8080`** to `buildUltra.computeHost` (host/name only, no port in that setting). Either:
+  - [ ] Put **nginx** (or another reverse proxy) on **8080**, forward to Ollama’s API (typically **`127.0.0.1:11434`**), and enforce or inject **`X-API-Key`** as your policy requires; **or**
+  - [ ] Run a small OpenAI-compatible gateway on **8080** that fronts Ollama and accepts **`X-API-Key`**.
+- [ ] **Validate the API** — From another machine or via curl on the host:
+  - [ ] `GET http://{host}:8080/v1/models` returns **200** when the same key the extension will use is supplied (if your gateway requires it).
+  - [ ] `POST http://{host}:8080/v1/chat/completions` streams or returns a normal completion for a tiny test payload.
+- [ ] **Align default model name** — Set **`buildUltra.localModelName`** in VS Code to the Ollama model id the gateway forwards (defaults in code include `qwen2.5-coder:32b`; must match what the upstream serves).
+- [ ] **Network & security** — Restrict **8080** to trusted clients (firewall / VPN / bind to localhost + SSH tunnel). **Do not** expose an unauthenticated inference endpoint to the public internet.
+- [ ] **VS Code / Build Ultra** — Set mode to **Workstation**, set **`buildUltra.computeHost`** to the reachable host (**no** `http://` or path), run **Build Ultra: Set Private Compute API Key** so **`X-API-Key`** matches the gateway.
+- [ ] **End-to-end test** — Open Ultra AI chat, confirm the footer shows **Ultra AI compute** **Ready**, send a short prompt, and confirm tool rounds behave if you use coding models.
+
+Optional later:
+
+- [ ] **Containerized vLLM or other engine** — Use the NVIDIA Container Toolkit path if you outgrow Ollama for throughput; keep the **same** external URL shape (**8080**, **`/v1/*`**, **`X-API-Key`** contract) or adjust your deployment docs accordingly.
+- [ ] **Ollama tuning** — Context length, concurrent requests, and GPU layers per model—tune for latency and VRAM on your hardware.
+
+---
+
 *Last audited against the repository state at documentation update time.*

@@ -6,6 +6,10 @@ import {
   SUPABASE_URL,
 } from "../config";
 import { MASTER_SYSTEM_PROMPT_FALLBACK } from "../chatPrompt/masterPrompt";
+import {
+  type BuildUltraSettings,
+  WORKSTATION_API_KEY_SECRET,
+} from "../buildUltraSettings";
 import type { HostToWebviewMessage } from "../shared/messages";
 
 /** Must match package.json `publisher` + `name` → vscode://mirror.build-ultra/... */
@@ -94,9 +98,80 @@ export class AuthService {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly postToWebview: (msg: HostToWebviewMessage) => void
+    private readonly postToWebview: (msg: HostToWebviewMessage) => void,
+    private readonly ultraSettings: BuildUltraSettings,
+    private readonly onPrivateComputeCacheUpdated: () => void
   ) {
     this.storage = new BlobSecretStorage(context.secrets);
+  }
+
+  /** Reload `user_private_compute` from Supabase and refresh workstation ping. */
+  async refreshPrivateComputeFromCloud(): Promise<void> {
+    await this.syncPrivateComputeFromCloud();
+    this.onPrivateComputeCacheUpdated();
+  }
+
+  /**
+   * Save workstation host (and optional default model) to Supabase for the signed-in user.
+   */
+  async linkPrivateComputeToAccount(): Promise<void> {
+    const client = this.getOrCreateClient();
+    if (!client) {
+      void vscode.window.showErrorMessage(
+        "Build Ultra: not configured. Backend URL and key are missing in the extension build."
+      );
+      return;
+    }
+    const {
+      data: { session },
+    } = await client.auth.getSession();
+    if (!session?.user) {
+      void vscode.window.showInformationMessage("Build Ultra: Sign in first.");
+      return;
+    }
+    const hostInput = await vscode.window.showInputBox({
+      title: "Build Ultra — Link workstation host",
+      prompt:
+        "Host or IP only (no http://). Port 8080 is assumed. Saved to your account for all devices.",
+      placeHolder: "e.g. 10.0.0.5 or gpu.example.com",
+      ignoreFocusOut: true,
+    });
+    if (hostInput === undefined) {
+      return;
+    }
+    const host = hostInput.replace(/^https?:\/\//, "").replace(/\/$/, "").split("/")[0]?.trim() ?? "";
+    const modelInput = await vscode.window.showInputBox({
+      title: "Build Ultra — Default model (optional)",
+      prompt:
+        "Ollama model id when chat uses the default model. Leave empty to keep only VS Code / account clearing behavior.",
+      placeHolder: "qwen2.5-coder:32b",
+      ignoreFocusOut: true,
+    });
+    if (modelInput === undefined) {
+      return;
+    }
+    const defaultModel = modelInput.trim();
+    const { error } = await client.from("user_private_compute").upsert(
+      {
+        id: session.user.id,
+        compute_host: host.length > 0 ? host : null,
+        default_model: defaultModel.length > 0 ? defaultModel : null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
+    if (error) {
+      void vscode.window.showErrorMessage(`Build Ultra: ${error.message}`);
+      return;
+    }
+    await this.ultraSettings.setCloudPrivateComputeCache(
+      host.length > 0 ? host : null,
+      defaultModel.length > 0 ? defaultModel : null
+    );
+    this.onPrivateComputeCacheUpdated();
+    void vscode.window.showInformationMessage(
+      "Build Ultra: Workstation host saved to your account."
+    );
   }
 
   /** OAuth redirect URI — add this exact URL to Supabase Auth → Redirect URLs. */
@@ -391,6 +466,9 @@ export class AuthService {
     this.lastUrl = "";
     this.lastKey = "";
     this.masterPromptContentCache = null;
+    await this.ultraSettings.clearCloudPrivateComputeCache();
+    await this.context.secrets.delete(WORKSTATION_API_KEY_SECRET);
+    this.onPrivateComputeCacheUpdated();
     this.postToWebview({ type: "LOGGED_OUT" });
   }
 
@@ -422,10 +500,106 @@ export class AuthService {
     return Math.max(0, totalQuota - tokensUsed);
   }
 
+  private async syncPrivateComputeFromCloud(): Promise<void> {
+    const client = this.getOrCreateClient();
+    if (!client) {
+      await this.ultraSettings.clearCloudPrivateComputeCache();
+      return;
+    }
+    const {
+      data: { session },
+    } = await client.auth.getSession();
+    if (!session?.user || !session.access_token) {
+      await this.ultraSettings.clearCloudPrivateComputeCache();
+      return;
+    }
+
+    const { url, key } = getUltraSupabaseConfig();
+    if (url && key) {
+      const fnUrl = `${url.replace(/\/$/, "")}/functions/v1/get-private-compute-credentials`;
+      try {
+        const res = await fetch(fnUrl, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            apikey: key,
+          },
+        });
+        if (res.ok) {
+          const body = (await res.json()) as {
+            computeHost?: unknown;
+            defaultModel?: unknown;
+            apiKey?: unknown;
+          };
+          const host =
+            typeof body.computeHost === "string" ? body.computeHost.trim() : "";
+          const model =
+            typeof body.defaultModel === "string" ? body.defaultModel.trim() : "";
+          const apiKeyRaw =
+            typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+          await this.ultraSettings.setCloudPrivateComputeCache(
+            host.length > 0 ? host : null,
+            model.length > 0 ? model : null
+          );
+          if (apiKeyRaw.length > 0) {
+            await this.context.secrets.store(WORKSTATION_API_KEY_SECRET, apiKeyRaw);
+          }
+          return;
+        }
+      } catch {
+        /* fall back to direct table read */
+      }
+    }
+
+    await this.syncPrivateComputeFromCloudDirect(client, session.user.id);
+  }
+
+  /** When the Edge Function is unreachable or not deployed yet. */
+  private async syncPrivateComputeFromCloudDirect(
+    client: SupabaseClient,
+    userId: string
+  ): Promise<void> {
+    const { data, error } = await client
+      .from("user_private_compute")
+      .select("compute_host, default_model, compute_api_key")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) {
+      void vscode.window.showWarningMessage(
+        `Build Ultra: Could not load account workstation settings.${error.message ? ` ${error.message}` : ""}`.slice(
+          0,
+          220
+        )
+      );
+      return;
+    }
+    const row = data as {
+      compute_host?: unknown;
+      default_model?: unknown;
+      compute_api_key?: unknown;
+    } | null;
+    const host =
+      row && typeof row.compute_host === "string" ? row.compute_host.trim() : "";
+    const model =
+      row && typeof row.default_model === "string" ? row.default_model.trim() : "";
+    const apiKey =
+      row && typeof row.compute_api_key === "string"
+        ? row.compute_api_key.trim()
+        : "";
+    await this.ultraSettings.setCloudPrivateComputeCache(
+      host.length > 0 ? host : null,
+      model.length > 0 ? model : null
+    );
+    if (apiKey.length > 0) {
+      await this.context.secrets.store(WORKSTATION_API_KEY_SECRET, apiKey);
+    }
+  }
+
   private async postLoginSuccess(user: {
     email?: string | null;
     user_metadata?: Record<string, unknown>;
   }): Promise<void> {
+    await this.syncPrivateComputeFromCloud();
     const remaining = await this.fetchQuotaRemaining();
     const displayName = displayNameFromUser(user);
     this.postToWebview({
@@ -436,5 +610,6 @@ export class AuthService {
         tokenQuotaRemaining: remaining,
       },
     });
+    this.onPrivateComputeCacheUpdated();
   }
 }
