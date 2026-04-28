@@ -1,4 +1,4 @@
-/** OpenAI-compatible tool definitions (mirror of supabase/functions/chat OPENAI_TOOLS). */
+/** OpenAI-compatible tool definitions (ultra of supabase/functions/chat OPENAI_TOOLS). */
 export const OPENAI_TOOLS: unknown[] = [
   {
     type: "function",

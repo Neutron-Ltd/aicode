@@ -5,8 +5,6 @@
 
 export type WebviewToHostMessage =
   | { type: "PING"; payload: { clientTs?: number } }
-  /** Legacy: opens browser OAuth (optional). */
-  | { type: "REQUIRE_LOGIN" }
   | { type: "LOGIN_REQUEST"; payload: { email: string; password: string } }
   | { type: "REGISTER_REQUEST"; payload: { email: string; password: string } }
   | { type: "SEND_MESSAGE"; payload: { text: string; modelId: string } }
@@ -104,8 +102,6 @@ export function parseWebviewMessage(raw: unknown): WebviewToHostMessage | null {
       if (isRecord(p) && typeof p.clientTs === "number") clientTs = p.clientTs;
       return { type: "PING", payload: { clientTs } };
     }
-    case "REQUIRE_LOGIN":
-      return { type: "REQUIRE_LOGIN" };
     case "LOGIN_REQUEST": {
       const p = raw.payload;
       if (!isRecord(p)) return null;

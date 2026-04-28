@@ -1,20 +1,12 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import * as vscode from "vscode";
-import {
-  ULTRA_OAUTH_PROVIDER,
-  SUPABASE_ANON_KEY,
-  SUPABASE_URL,
-} from "../config";
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import { MASTER_SYSTEM_PROMPT_FALLBACK } from "../chatPrompt/masterPrompt";
 import {
   type BuildUltraSettings,
   WORKSTATION_API_KEY_SECRET,
 } from "../buildUltraSettings";
 import type { HostToWebviewMessage } from "../shared/messages";
-
-/** Must match package.json `publisher` + `name` → vscode://mirror.build-ultra/... */
-export const BUILD_ULTRA_URI_AUTHORITY = "mirror.build-ultra";
-export const BUILD_ULTRA_AUTH_PATH = "/auth";
 
 const STORAGE_BLOB_KEY = "build-ultra.supabase.auth.storage.v1";
 
@@ -66,12 +58,10 @@ class BlobSecretStorage {
 export function getUltraSupabaseConfig(): {
   url: string;
   key: string;
-  provider: string;
 } {
   const url = SUPABASE_URL.trim();
   const key = SUPABASE_ANON_KEY.trim();
-  const provider = ULTRA_OAUTH_PROVIDER.trim() || "github";
-  return { url, key, provider };
+  return { url, key };
 }
 
 function displayNameFromUser(user: {
@@ -174,12 +164,7 @@ export class AuthService {
     );
   }
 
-  /** OAuth redirect URI — add this exact URL to Supabase Auth → Redirect URLs. */
-  getRedirectUriString(): string {
-    return `vscode://${BUILD_ULTRA_URI_AUTHORITY}${BUILD_ULTRA_AUTH_PATH}`;
-  }
-
-  /** Same client used for OAuth — session lives in SecretStorage. */
+  /** Same client used for sign-in — session lives in SecretStorage. */
   getSupabaseClient(): SupabaseClient | null {
     return this.getOrCreateClient();
   }
@@ -232,10 +217,6 @@ export class AuthService {
   }
 
   /**
-   * GitHub OAuth (see `ULTRA_OAUTH_PROVIDER` in config) is a **primary** sign-in path:
-   * {@link startOAuthLogin} with PKCE and `vscode://…/auth` callback. Enable the provider
-   * in Supabase Auth and add the redirect URL there.
-   *
    * Email/password sign-in. Session tokens are persisted by the Supabase client via
    * {@link BlobSecretStorage} → `context.secrets` (no separate manual JWT store).
    */
@@ -334,104 +315,6 @@ export class AuthService {
       },
     });
     return this.client;
-  }
-
-  async startOAuthLogin(): Promise<void> {
-    const client = this.getOrCreateClient();
-    const { provider } = getUltraSupabaseConfig();
-    if (!client) {
-      const msg = "Build Ultra is not configured. Backend URL and key are missing in the extension build.";
-      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
-      this.postToWebview({
-        type: "AUTH_ERROR",
-        payload: { message: msg },
-      });
-      return;
-    }
-
-    const redirectTo = this.getRedirectUriString();
-    const { data, error } = await client.auth.signInWithOAuth({
-      provider: provider as never,
-      options: {
-        redirectTo,
-        skipBrowserRedirect: true,
-      },
-    });
-
-    if (error) {
-      void vscode.window.showErrorMessage(`Build Ultra sign-in: ${error.message}`);
-      this.postToWebview({
-        type: "AUTH_ERROR",
-        payload: { message: error.message },
-      });
-      return;
-    }
-
-    if (!data.url) {
-      const msg = "No OAuth URL returned.";
-      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
-      this.postToWebview({ type: "AUTH_ERROR", payload: { message: msg } });
-      return;
-    }
-
-    await vscode.env.openExternal(vscode.Uri.parse(data.url));
-  }
-
-  async handleUri(uri: vscode.Uri): Promise<void> {
-    if (uri.scheme !== "vscode") return;
-    if (uri.authority !== BUILD_ULTRA_URI_AUTHORITY) return;
-    if (!uri.path.includes("auth")) return;
-
-    const client = this.getOrCreateClient();
-    if (!client) {
-      void vscode.window.showErrorMessage(
-        "Build Ultra: not configured. Backend URL and key are missing in the extension build."
-      );
-      return;
-    }
-
-    const params = new URLSearchParams(uri.query);
-    const oauthError = params.get("error_description") || params.get("error");
-    if (oauthError) {
-      void vscode.window.showErrorMessage(`Build Ultra auth: ${oauthError}`);
-      this.postToWebview({
-        type: "AUTH_ERROR",
-        payload: { message: oauthError },
-      });
-      return;
-    }
-
-    const code = params.get("code");
-    if (!code) {
-      void vscode.window.showErrorMessage(
-        "Build Ultra: OAuth callback missing code. Check redirect URLs for this app."
-      );
-      this.postToWebview({
-        type: "AUTH_ERROR",
-        payload: { message: "Missing OAuth code in callback." },
-      });
-      return;
-    }
-
-    const { data, error } = await client.auth.exchangeCodeForSession(code);
-    if (error) {
-      void vscode.window.showErrorMessage(`Build Ultra: ${error.message}`);
-      this.postToWebview({
-        type: "AUTH_ERROR",
-        payload: { message: error.message },
-      });
-      return;
-    }
-
-    const user = data.session?.user;
-    if (!user) {
-      const msg = "No user session after OAuth.";
-      void vscode.window.showErrorMessage(`Build Ultra: ${msg}`);
-      this.postToWebview({ type: "AUTH_ERROR", payload: { message: msg } });
-      return;
-    }
-
-    await this.postLoginSuccess(user);
   }
 
   /** If a session exists in secrets, notify webview (e.g. after reload). */

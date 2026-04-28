@@ -148,7 +148,7 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
     this._workspaceScanner = scanner;
   }
 
-  /** Post a host→webview protocol message (e.g. LOGIN_SUCCESS from OAuth). */
+  /** Post a host→webview protocol message (e.g. LOGIN_SUCCESS). */
   postHostMessage(msg: HostToWebviewMessage): void {
     void this._webview?.postMessage(msg);
   }
@@ -217,9 +217,6 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "REQUEST_RUNTIME_SYNC":
         void this._auth?.refreshPrivateComputeFromCloud();
-        break;
-      case "REQUIRE_LOGIN":
-        void this._auth?.startOAuthLogin();
         break;
       case "LOGIN_REQUEST": {
         const auth = this._auth;

@@ -1,4 +1,4 @@
--- user_quotas: per-user token accounting for Mirror chat
+-- user_quotas: per-user token accounting for ultra chat
 begin;
 
 create table if not exists public.user_quotas (

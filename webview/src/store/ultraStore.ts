@@ -30,8 +30,8 @@ export interface UltraState {
   userLabel: string | null;
   userEmail: string | null;
   signingIn: boolean;
-  /** Distinguishes GitHub OAuth vs email/password for loading UI. */
-  pendingAuth: "none" | "oauth" | "password";
+  /** Email/password auth loading state. */
+  pendingAuth: "none" | "password";
   authError: string | null;
   /** Chat / Edge / network errors (distinct from auth). */
   chatError: string | null;
@@ -55,7 +55,6 @@ export interface UltraState {
   setInputDraft: (v: string) => void;
   sendPing: () => void;
   indexWorkspace: () => void;
-  startGithubOAuth: () => void;
   submitLogin: (email: string, password: string) => void;
   submitRegister: (email: string, password: string) => void;
   sendUserMessage: () => void;
@@ -309,11 +308,6 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   indexWorkspace: () => {
     set({ isIndexing: true, chatError: null });
     postToHost({ type: "INDEX_WORKSPACE" });
-  },
-
-  startGithubOAuth: () => {
-    set({ signingIn: true, pendingAuth: "oauth", authError: null });
-    postToHost({ type: "REQUIRE_LOGIN" });
   },
 
   submitLogin: (email: string, password: string) => {

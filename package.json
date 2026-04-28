@@ -3,7 +3,7 @@
   "displayName": "Build Ultra",
   "description": "AI coding assistant — Ultra AI by Build Ultra",
   "version": "0.0.1",
-  "publisher": "mirror",
+  "publisher": "ultra",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -11,8 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:buildUltra.chat",
-    "onUri"
+    "onView:buildUltra.chat"
   ],
   "main": "./out/extension.js",
   "contributes": {

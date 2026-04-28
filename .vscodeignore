@@ -10,5 +10,5 @@ webview/**
 **/*.ts
 postcss.config.js
 tailwind.config.js
-mirror.md
+ultra.md
 node_modules/@types/**

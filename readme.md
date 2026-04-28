@@ -1,240 +1,190 @@
 # Build Ultra — Product Requirements Document
 
-**Implementation status (codebase audit):** ✅ done · ⚠️ partial / gap · ❌ not implemented (or not applicable yet).
+**Status legend:** ✅ shipped in this repo · ⚠️ partial / depends on config or path · ❌ not implemented.
 
 ---
 
-## 1. Project Overview
+## 1. Project overview
 
-✅ **Build Ultra** is a premium, high-agency VS Code extension designed to transcend the limitations of traditional chat-based coding assistants. It serves as an autonomous bridge between a developer’s local workspace and the **Ultra AI Compute Layer**—a high-performance, private infrastructure optimized for 2026-era frontier coding models.
-
-✅ The core philosophy of Build Ultra is **Managed Privacy**. It uses a hybrid cloud-authenticated architecture where sensitive user data (authentication, billing quotas, and codebase metadata) is managed by a secure Supabase SaaS controller, while the actual heavy-compute AI reasoning can run on **operator-managed or dedicated compute** you configure—so speed and code privacy stay under your control without exposing hardware specifics in the product UI.
-
----
-
-## 2. Technical Stack
-
-### 2.1 Frontend Architecture
-
-| Area | Choice | Status |
-|------|--------|--------|
-| **Framework** | React 18 with Zustand for lightweight state management | ✅ |
-| **Styling** | Tailwind CSS, using `color-mix` to adapt to native VS Code theme variables (`var(--vscode-*)`) | ✅ |
-| **Build** | Bundled via esbuild for performance and size | ✅ |
-
-### 2.2 Backend SaaS Controller (Cloud)
-
-| Area | Choice | Status |
-|------|--------|--------|
-| **Infrastructure** | Supabase Edge Functions (Deno runtime) | ✅ |
-| **Database** | PostgreSQL with pgvector for codebase embeddings | ✅ |
-| **Security** | Multi-layer JWT verification for user accounts and global “Master Prompts” | ✅ (Edge); ⚠️ Workstation chat does not use this path |
-
-### 2.3 Ultra AI Compute Layer (Private Infrastructure)
-
-| Area | Choice | Status |
-|------|--------|--------|
-| **Gateway** | Nginx reverse proxy (port 8080) enforcing `X-API-Key` and JWT validation | ⚠️ Extension sends `X-API-Key`; gateway is operator-managed |
-| **Inference** | vLLM (throughput) and Ollama (flexibility) | ⚠️ Configurable URL/model only; engines not bundled |
-| **Models** | Qwen 2.5 Coder (32B), DeepSeek-V3.1 Thinking, Gemini 2.5 Flash Lite | ⚠️ Defaults/strings only; not enforced in code |
+- ✅ **Positioning** — VS Code extension that bridges the local workspace to an **Ultra AI** compute layer (cloud-hosted or private OpenAI-compatible endpoint).
+- ✅ **Managed privacy** — Hybrid architecture: **Supabase** for auth, quotas, prompts, embeddings metadata, and billing-related state; heavy inference can run on **operator-managed** hardware without baking infra details into the UI copy.
 
 ---
 
-## 3. Core Features & Requirements
+## 2. Technical stack
 
-### 3.1 Mandatory Auth & Quota Enforcement (Unified SaaS Model)
+### 2.1 Frontend architecture
 
-- ✅ **Unified access** — Local compute access requires a successful Supabase session. *(Chat only when `isLoggedIn`; `webview/src/App.tsx`. Workstation path requires JWT in `ApiService.sendWorkstationChatMessage`.)*
-- ✅ **Unified quota reporting** — After streaming in Workstation mode, the extension captures `usage.total_tokens` when present or estimates via `(input + output) / 4`, then POSTs to `/functions/v1/log-usage`. *(Edge: `supabase/functions/log-usage/index.ts`; client: `ApiService.postWorkstationLogUsage` after each successful turn.)*
-- ✅ **Kill-switch** — If `tokens_remaining <= 0`, the backend returns `401` / `402`, and the UI disables chat input. *(Cloud `402` → `handleChatHttpError` + `UPDATE_QUOTA` 0; Workstation preflight + `log-usage` `402`; `quotaReady` / `tokenQuota` gate `ChatScreen` `InputArea` and `sendUserMessage` in `ultraStore`.)*
+- ✅ **React 18** + **Zustand** for webview state (`webview/src`).
+- ✅ **Tailwind CSS** with `color-mix` against `var(--vscode-*)`.
+- ✅ **esbuild** webview bundle + TypeScript extension host (`npm run compile`, `npm run build:webview`).
 
-### 3.2 Master Prompt Engine (The AI “Brain”)
+### 2.2 Backend SaaS controller (cloud)
 
-- ✅ **Canonical source** — System prompts are fetched from the `master_prompts` table in Supabase. *(Cloud: `supabase/functions/chat/index.ts` `fetchMasterSystemPrompt`. Workstation: `AuthService.resolveDefaultMasterPrompt` uses the same query; offline/DB errors use `MASTER_SYSTEM_PROMPT_FALLBACK` in `src/chatPrompt/masterPrompt.ts`, aligned with the Edge fallback string.)*
-- ✅ **Persona** — Ultra AI branding plus Chain-of-Thought (CoT) and `write_file` discipline come from the DB default row when the fetch succeeds (see seed migration). *(`.ultrarules` and editor context are still assembled via `PromptBuilderService` / `assembleMessages.ts`; see §4.3 for Tab/Edit coverage.)*
-- ✅ **Query expansion** — Injects active file language, framework, and diagnostic context into vague prompts. *(Editor + diagnostics + terminal in `PromptBuilderService` / payload.)*
+- ✅ **Supabase Edge Functions** — `chat`, `embed`, `log-usage`, `get-private-compute-credentials`, `stripe-webhook` under `supabase/functions/`.
+- ✅ **PostgreSQL + pgvector** — migrations under `supabase/migrations/` (e.g. embeddings storage, `master_prompts`, `user_quotas`, `user_private_compute`).
+- ✅ **JWT** — User session for Cloud calls and for workstation quota reporting; anon key + user JWT on function calls where implemented.
+- ⚠️ **“Master prompts” on Edge** — Enforced on the `chat` path; **Workstation** chat hits private HTTP directly and uses DB/fallback prompts client-side (`AuthService.resolveDefaultMasterPrompt`).
 
-### 3.3 Ultra AI Chat Interface
+### 2.3 Ultra AI compute layer (private infrastructure)
 
-- ✅ **Zero-jitter UX** — Streaming uses `overflow-anchor: auto` and `requestAnimationFrame` to avoid UI “shaking.” *(Scroll container in `MessageList.tsx`.)*
-- ✅ **Stateful feedback** — `useDeferredValue` for smooth markdown rendering. *( `MessageList.tsx`.)*
-- ✅ **Branding** — Every response is labeled “Ultra AI.” The “thinking” animation persists until the first token arrives. *(Assistant label + typing indicator in `MessageList.tsx`.)*
-
-### 3.4 Direct File Manipulation (Autonomous Agency)
-
-- ✅ **Recursive agentic loop** — If the model returns `tool_calls` (for example `read_file`), the extension executes them and re-invokes the model with results until an edit or final response is produced. *( `ApiService.ts` tool rounds.)*
-- ✅ **One-line rule** — `write_file` must include a valid `range` (`startLine` / `endLine`, 1-based inclusive); `ToolExecutionService.writeFile` returns a tool error if it is missing or out of bounds. Whole-file rewrites use lines `1` through the document line count. Tool schemas require `range` in `openAiTools.ts` and the Edge `chat` function; default master prompt v2 is added in migration `20260428140000_master_prompt_write_file_range_v2.sql`.
-- ✅ **WorkspaceEdit** — All edits go through `vscode.WorkspaceEdit` for single-action undo (Cmd+Z).
-
-### 3.5 Codebase Indexing & Semantic Context (Cloud RAG)
-
-- ✅ **Background scanning** — Debounced `onDidSaveTextDocument` in `extension.ts` calls `WorkspaceScannerService.indexDocumentOnSave` (Cloud mode, signed in). Incremental upsert uses `reindex: "incremental"` on the `embed` Edge function; full manual index sends `reindex: "full"`. `.gitignore` / `.buildultraignore` reuse the same ignore logic with a short TTL cache.
-- ✅ **`.buildultraignore`** — Honored when collecting files for embeddings. *( `WorkspaceScannerService.ts`.)*
-- ✅ **Intelligent context truncation** — Context bundle order: diagnostics → `.ultrarules` → editor (selection + active file / neighborhood) → RAG → terminal in `assembleMessages.ts`, Edge `chat/index.ts`, and `PromptBuilderService.buildToolFollowupContextBundle`. Shared char budget prunes **RAG, then active file excerpt, then rules**; diagnostics, selection, and terminal are not truncated in this pass. Large active files use a cursor neighborhood in `EditorService.getActiveFileContextForPrompt`.
-
-### 3.6 Safety & Privacy Guardrails
-
-- ✅ **Path blocklist** — `.env`, `.git`, `node_modules`, `dist`, and `build` path segments are blocked for tools in `toolPathGuards.ts` (`ToolExecutionService.resolvePath`).
-- ✅ **Binary safety** — Shared `looksBinary.ts` and `MAX_TOOL_FILE_BYTES` for `WorkspaceScannerService` indexing and `ToolExecutionService` `read_file` (skip binary / reject oversize files).
-- ✅ **Destructive protection** — Mutations go through webview tool-plan approval plus `vscode.diff` and Apply/Skip before execution. `write_file` without a valid line `range` fails with a tool error. *(**No `delete_file` tool** — destructive deletes are not exposed to the model.)*
-
-### 3.7 Mutation Observer UI
-
-- ✅ **Real-time visibility** — After the tool plan is confirmed, host posts `MUTATION_PROGRESS` lines from the `ApiService` tool loops (`read_file`, etc.); the webview shows them in `MutationBanner` (`webview/src/components/chat/MutationBanner.tsx`) below `ToolPlanPanel`.
-- ✅ **Diff inspection** — Before `openMutationDiffAndConfirm` (`src/diffReview.ts`), the host posts `MUTATION_PROGRESS` with `diffAwaiting: true`; the banner explains the diff / Apply or Skip flow and offers **Focus editor** (`FOCUS_EDITOR_GROUPS` → `workbench.action.focusActiveEditorGroup` in `BuildUltraChatViewProvider.ts`).
-
-### 3.8 Infrastructure Privacy
-
-- ✅ **Zero-knowledge origin** — User-visible copy avoids infrastructure signaling: neutral **`buildUltra.computeHost`** (with legacy **`buildUltra.localIp`** fallback) in [package.json](package.json) / [buildUltraSettings.ts](src/buildUltraSettings.ts); mode **`enumDescriptions`**; no “gateway” jargon in [ApiService.ts](src/services/ApiService.ts), [WorkstationConnectionFooter.tsx](webview/src/components/chat/WorkstationConnectionFooter.tsx), or key prompts. Host console logs for indexing omit upstream response bodies ([WorkspaceScannerService.ts](src/services/WorkspaceScannerService.ts)). Stored mode values remain `Cloud` | `Workstation` for settings compatibility; chat/footer branding stays **Ultra AI** / **Ultra AI compute**.
+- ⚠️ **Gateway** — Extension assumes **`http://{host}:8080`** and **`X-API-Key`**; **nginx (or equivalent) is operator-managed** and not defined in this repo.
+- ⚠️ **Inference engines** — **Ollama / vLLM** implied by OpenAI-compatible API; nothing bundled in-repo.
+- ⚠️ **Models** — Defaults/strings in settings (e.g. `qwen2.5-coder:32b`); actual model list comes from upstream.
 
 ---
 
-## 4. Cursor-Grade Native Integration (“Magical” Layer)
+## 3. Core features and requirements
 
-### 4.1 Ultra Tab (Intelligent Autocomplete)
+### 3.1 Auth and quota enforcement (unified SaaS model)
 
-- ❌ **Ghost text** — `TextEditorDecorationType` for multi-line completions ahead of the cursor.
-- ❌ **FIM (Fill-In-the-Middle)** — Send ~2,000 characters before and after the cursor to the local model for next-block prediction.
-- ❌ **Debounced trigger** — Suggestions after ~50ms of typing idle to limit lag.
+- ✅ **Signed-in gate** — Chat flow expects Supabase session (`isLoggedIn` in webview; workstation still uses session for `log-usage` and prompts).
+- ✅ **`/functions/v1/log-usage`** after Workstation turns — `ApiService.postWorkstationLogUsage` with usage estimate or `usage.total_tokens`.
+- ✅ **Kill-switch** — Cloud and `log-usage` can return **401/402**; UI gates input via quota state (`ultraStore` / `ChatScreen`).
+- ✅ **Email/password sign-in and registration** — `AuthService.loginUser` / `registerUser`; session in Secret Storage via Supabase client (**no** GitHub OAuth or `vscode://` auth callback in this extension).
+
+### 3.2 Master prompt engine (“brain”)
+
+- ✅ **`master_prompts` table** — Cloud `chat` and workstation `resolveDefaultMasterPrompt` read **`name=default`**; fallback constant in `src/chatPrompt/masterPrompt.ts`.
+- ⚠️ **Persona** — Driven by DB content when fetch succeeds; not every edge case re-validated in UI.
+- ✅ **Query expansion** — `PromptBuilderService` / `assembleMessages`-style payloads include editor, diagnostics, terminal, RAG when Cloud path assembles them.
+
+### 3.3 Ultra AI chat interface
+
+- ✅ **Stable streaming scroll** — `overflowAnchor: "auto"` + **`requestAnimationFrame`** scroll in `MessageList.tsx`.
+- ✅ **`useDeferredValue`** — defers heavy markdown during streaming (`MessageList.tsx`).
+- ✅ **Branding** — “Ultra AI” labels and thinking state in `MessageList` / `Header`; footer **Ultra AI compute** in `WorkstationConnectionFooter`.
+
+### 3.4 Direct file manipulation (agentic editing)
+
+- ✅ **Tool loop** — `ApiService` recursive rounds with `read_file`, `write_file`, `create_file`, `list_directory` (`openAiTools.ts`); **no `delete_file`** tool in codebase.
+- ✅ **Line range for `write_file`** — Schema + `ToolExecutionService` enforcement.
+- ✅ **`vscode.WorkspaceEdit`** — Edits for undo consistency.
+
+### 3.5 Codebase indexing and semantic context (cloud RAG)
+
+- ✅ **Save debounce → index** — `extension.ts` → `WorkspaceScannerService.indexDocumentOnSave` (Cloud mode + signed-in checks in scanner).
+- ✅ **`.buildultraignore`** — honored in scanner collection.
+- ✅ **Context truncation policy** — implemented in `assembleMessages`, Edge `chat`, and tool follow-up bundling (ordering: diagnostics → rules → editor → RAG → terminal with pruning rules as coded).
+
+### 3.6 Safety and privacy guardrails
+
+- ✅ **Path blocklist** — `toolPathGuards` / `ToolExecutionService.resolvePath` (`.env`, `.git`, `node_modules`, `dist`, `build`, etc.).
+- ✅ **Binary / size** — `tooling/looksBinary.ts` (16 KiB sample, NUL / control ratio), `MAX_TOOL_FILE_BYTES`.
+- ✅ **Destructive scope** — Tool plan + diff review flows (`diffReview.ts`, mutation banner); **`write_file`** without valid range fails.
+
+### 3.7 Mutation observer UI
+
+- ✅ **Progress lines** — `MUTATION_PROGRESS` to webview; `MutationBanner` component.
+- ✅ **Diff flow** — `diffAwaiting`, Apply/Skip, focus editor command from webview message.
+
+### 3.8 Infrastructure privacy (product tone)
+
+- ✅ **Neutral copy** — `computeHost` / `localIp` settings; workstation footer avoids raw URLs; `ApiService` comments avoid “gateway” in user strings.
+
+### 3.9 (Implicit) Account-linked workstation settings
+
+- ✅ **`user_private_compute`** — host, default model, optional `compute_api_key` (migrations); RLS per user.
+- ✅ **Edge `get-private-compute-credentials`** — optional fast path; PostgREST fallback in `AuthService.syncPrivateComputeFromCloud`.
+- ✅ **Palette** — **Build Ultra: Link Workstation Host to Account**; **Set Private Compute API Key**; logout clears synced workstation secret from Secret Storage.
+
+---
+
+## 4. Cursor-grade native integration (“magical” layer)
+
+### 4.1 Ultra Tab (inline autocomplete)
+
+- ❌ **Ghost text / FIM / debounced inline triggers** — no `TextEditorDecorationType` or inline-completion provider found in `src/`.
 
 ### 4.2 Ultra Edit (Cmd+K / Ctrl+K)
 
-- ❌ **Inline input** — Floating input in the editor (native QuickInput or overlay).
-- ❌ **Selection editing** — With a selection, Ultra AI produces a diff scoped to that selection.
-- ❌ **Live diff** — Show proposed changes in a green/red inline diff; user **Accept** or **Reject** before apply.
+- ❌ **Inline prompt, selection-scoped inline diff, accept/reject in editor** — not present; editing is chat + tool loop driven.
 
-### 4.3 Workspace Rules (`.ultrarules`)
+### 4.3 Workspace rules (`.ultrarules`)
 
-- ⚠️ **Behavior injection** — Read `.ultrarules` at the repo root and inject as **system-level constraints** into every Tab and Edit request. *(Injected into **chat** context via `PromptBuilderService`; §4.1 / §4.2 features do not exist yet.)*
-
----
-
-## 5. Performance & Observability
-
-- ✅ **Telemetry** — PostHog for `tool_execution` and `user_undo_action`. *( `ToolExecutionService`, `aiUndoTelemetry.ts`, `telemetry.ts`, optional webview `posthog-js`.)*
-- ✅ **Edit concurrency** — `AsyncSerialQueue` to avoid races during recursive loops. *( `toolExecutionQueue.ts`.)*
+- ⚠️ **Tab/Edit injection** — ❌ not applicable (features absent).
+- ✅ **Chat** — `.ultrarules` fed via `PromptBuilderService` into chat payloads where implemented.
 
 ---
 
-## 6. Future Enhancements
+## 5. Performance and observability
 
-- ❌ **Multi-turn planning** — Visual edit plans (checklist) before execution. *(Not implemented as specified in §6; partial overlap with tool plan review only.)*
-- ❌ **Terminal auto-debugging** — Capture terminal stack traces and suggest fixes automatically.
-
----
-
-## 7. Remove or Replace (cleanup backlog)
-
-Items to **delete, replace, or narrow** so the codebase matches the PRD and avoids misleading or dead surface area:
-
-1. **Unused `ContextService`** — `src/services/ContextService.ts` is an empty stub; remove it or implement RAG/context orchestration there so the name matches behavior.
-2. **Orphan / placeholder packages** — Periodically run dependency audit; remove unused npm deps and any experimental commands not registered in `package.json` / `extension.ts`.
+- ⚠️ **PostHog** — `telemetry.ts` + `captureTelemetryEvent` for `tool_execution` and `user_undo_action`; **disabled when `POSTHOG_API_KEY` is empty** in bundled `config` (default empty).
+- ✅ **Edit concurrency** — `toolExecutionQueue` / `AsyncSerialQueue` pattern for tool rounds.
 
 ---
 
-## 8. Workstation operator checklist (private compute)
+## 6. Future enhancements
 
-The extension’s **Workstation** mode talks to **OpenAI-compatible** HTTP endpoints on **`http://{computeHost}:8080`** (see [`buildUltraSettings.getLocalBaseUrl`](src/buildUltraSettings.ts): `/v1/models` for reachability, `/v1/chat/completions` for chat). It sends **`X-API-Key`** from VS Code Secret Storage (after sync from the account or manual entry). **Host**, **default model**, and optionally **`compute_api_key`** live in Supabase **`user_private_compute`**, merged with local settings—**`buildUltra.computeHost` / `localIp` still override** the account host when non-empty. After sign-in (and on runtime sync), the extension calls Edge **`get-private-compute-credentials`** when deployed, or reads the same row directly; if the account has **`compute_api_key`**, it is copied into Secret Storage so users need not run **Set Private Compute API Key**. **Logout clears** that secret so a shared machine does not keep the previous user’s key.
-
-### 8.1 Already completed (example baseline)
-
-These steps are **done** on a reference workstation; adjust to your environment.
-
-- ✅ **OS packages updated** — `apt update` / `upgrade`.
-- ✅ **NVIDIA Container Toolkit** — Installed; Docker restarted (for future containerized inference if you use it).
-- ✅ **Ollama** — Installed; models pulled (e.g. `qwen2.5-coder:32b`, `deepseek-v2:lite`, `llama3.1:8b`, `mistral-small`).
-
-### 8.2 Operator checklist (compute host + dev machine)
-
-**VS Code (Workstation mode)** — Apply migrations through [`20260428200000_user_private_compute_api_key.sql`](supabase/migrations/20260428200000_user_private_compute_api_key.sql). Deploy the Edge function: **`supabase functions deploy get-private-compute-credentials`** (see [`supabase/config.toml`](supabase/config.toml)). Operators can set **`compute_host`**, **`default_model`**, and **`compute_api_key`** in `user_private_compute` per user (Table Editor, service-role script, or onboarding); RLS restricts each row to **`auth.uid()`**. After sign-in, the extension pulls credentials (preferring the function) and fills Secret Storage when **`compute_api_key`** is set—**Build Ultra: Set Private Compute API Key** is then optional. Each developer: **`buildUltra.mode`** **Workstation**, sign in, optionally **Link Workstation Host to Account**, optional local **`computeHost` / `localIp` / `localModelName`** overrides. **`curl -H "X-API-Key: …" http://{effectiveHost}:8080/v1/models`** should return **200**. **Request runtime sync** reloads account fields after cloud changes. Confirm footer **Ultra AI compute** **Ready** and **`log-usage`** updates **`user_quotas`**. Treat **`compute_api_key`** like any secret: DB backups and admin access imply risk; prefer tight RLS and rotation; for nginx **`JWT` instead of a static key**, see plan “Option B” (gateway change—not bundled here).
-
-#### A. Compute host (Ubuntu — reference: `llm-MACH`, Ubuntu 22.04, dual GPU, Ollama + nginx)
-
-- ✅ **`ollama.service`** — Enabled and **active** (`systemctl status ollama`); survives reboot.
-- ✅ **GPU** — `nvidia-smi` shows driver and GPU(s); `ollama list` includes models (e.g. **`qwen2.5-coder:32b`**).
-- ✅ **nginx on port 8080** — Listens on **`0.0.0.0:8080`**, **`proxy_pass http://127.0.0.1:11434`**. Site file e.g. **`/etc/nginx/sites-available/build-ultra-ollama`** symlinked under **`sites-enabled`**; default **`default`** site removed if it blocked nginx (port 80 in use).
-- ✅ **`X-API-Key` enforcement** — nginx rejects missing/wrong key with **403**; correct header matches the secret you will store in the extension (Secret Storage).
-- ✅ **Local smoke tests** — `curl --noproxy '*'` to **`http://127.0.0.1:8080/v1/models`** and **`/v1/chat/completions`** with **`X-API-Key`** returns **200** and valid JSON.
-- ⚠️ **`http_proxy`** — If the shell exports a proxy, use **`curl --noproxy '*'`** (or **`NO_PROXY`**) for **`127.0.0.1`**, or localhost requests may fail silently.
-- ⚠️ **Firewall** — When **`ufw`** is active, allow **`8080/tcp`** to the LAN; keep **8080** off the public internet.
-
-#### B. Security hygiene
-
-- ⚠️ **Rotate** leaked keys: update nginx, **`user_private_compute.compute_api_key`** (if used), redeploy or re-sync; clear affected users’ VS Code secret via logout or **Set Private Compute API Key**; **`sudo nginx -t && sudo systemctl reload nginx`**.
-
-### 8.3 Optional later
-
-- ⚠️ **Containerized vLLM or other engine** — Use the NVIDIA Container Toolkit path if you outgrow Ollama for throughput; keep the **same** external URL shape (**8080**, **`/v1/*`**, **`X-API-Key`** contract) or adjust your deployment docs accordingly.
-- ⚠️ **Ollama tuning** — Context length, concurrent requests, and GPU layers per model—tune for latency and VRAM on your hardware.
+- ❌ **Multi-turn visual planning** — checklist UI before execution (beyond current tool-plan review).
+- ❌ **Terminal auto-debug** — automatic trace capture and fix suggestions.
 
 ---
 
-## 8. Workstation operator checklist (private compute)
+## 7. Extra pieces that exist in code (but aren’t the main PRD story)
 
-The extension’s **Workstation** mode talks to **OpenAI-compatible** HTTP endpoints on **`http://{computeHost}:8080`** (see `buildUltraSettings.getLocalBaseUrl`: `/v1/models` for reachability, `/v1/chat/completions` for chat). It sends the **`X-API-Key`** header from Secret Storage / settings.
+Sections 1–6 describe the product. This section is a **plain-English map** of important plumbing so you aren’t surprised when you open the repo.
 
-### 8.1 Already completed (example baseline)
+**Why sign-in says “not configured”**  
+The extension does **not** read Supabase from your database at startup. It only knows your project if you create a **`.env`** file with **`SUPABASE_URL`** and **`SUPABASE_ANON_KEY`**, then run **`npm run compile`**. A small script (`scripts/gen-config.mjs`) writes **`src/config.generated.ts`**. No `.env` (or empty values) means login cannot work in a dev build.
 
-These steps are **done** on a reference workstation; adjust to your environment.
+**Where the extension boots**  
+**`src/extension.ts`** is the main switchboard: it creates settings, auth, the chat webview, the API layer, the workspace indexer, tool execution, registers save handlers, and your command-palette commands.
 
-- [x] OS packages updated (`apt update` / `upgrade`).
-- [x] **NVIDIA Container Toolkit** installed; Docker restarted (for future containerized inference if you use it).
-- [x] **Ollama** installed; models pulled (e.g. `qwen2.5-coder:32b`, `deepseek-v2:lite`, `llama3.1:8b`, `mistral-small`).
+**How the sidebar chat talks to TypeScript**  
+The webview and the extension don’t call each other ad hoc—they use a **typed message list** in **`src/shared/messages.ts`**. The big class that owns the webview and forwards those messages is **`BuildUltraChatViewProvider`**.
 
-### 8.2 Remaining tasks (do next)
+**Preview tabs when you review a diff**  
+When the flow needs a read-only “preview” document (for example while inspecting an AI-suggested edit), the code uses a custom URI scheme **`buildultra-preview:`** via **`BuildUltraPreviewProvider`** (**`virtualDocumentProvider.ts`**). VS Code treats it like a temporary document.
 
-- [ ] **Run Ollama as a service** — Ensure `ollama serve` runs after reboot (e.g. verify the `ollama` systemd unit is enabled and active, or your chosen process manager).
-- [ ] **Confirm GPU visibility** — Run `nvidia-smi` and, when loading a model, confirm VRAM usage behaves as expected for your chosen default model.
-- [ ] **Expose port 8080 compatible with the extension** — The extension **always** appends **`:8080`** to `buildUltra.computeHost` (host/name only, no port in that setting). Either:
-  - [ ] Put **nginx** (or another reverse proxy) on **8080**, forward to Ollama’s API (typically **`127.0.0.1:11434`**), and enforce or inject **`X-API-Key`** as your policy requires; **or**
-  - [ ] Run a small OpenAI-compatible gateway on **8080** that fronts Ollama and accepts **`X-API-Key`**.
-- [ ] **Validate the API** — From another machine or via curl on the host:
-  - [ ] `GET http://{host}:8080/v1/models` returns **200** when the same key the extension will use is supplied (if your gateway requires it).
-  - [ ] `POST http://{host}:8080/v1/chat/completions` streams or returns a normal completion for a tiny test payload.
-- [ ] **Align default model name** — Set **`buildUltra.localModelName`** in VS Code to the Ollama model id the gateway forwards (defaults in code include `qwen2.5-coder:32b`; must match what the upstream serves).
-- [ ] **Network & security** — Restrict **8080** to trusted clients (firewall / VPN / bind to localhost + SSH tunnel). **Do not** expose an unauthenticated inference endpoint to the public internet.
-- [ ] **VS Code / Build Ultra** — Set mode to **Workstation**, set **`buildUltra.computeHost`** to the reachable host (**no** `http://` or path), run **Build Ultra: Set Private Compute API Key** so **`X-API-Key`** matches the gateway.
-- [ ] **End-to-end test** — Open Ultra AI chat, confirm the footer shows **Ultra AI compute** **Ready**, send a short prompt, and confirm tool rounds behave if you use coding models.
+**Stripe**  
+There is a Supabase Edge function **`stripe-webhook`** for payment events. The main feature sections don’t walk through billing UI or flows—that’s separate surface area.
 
-Optional later:
+**`ContextService`**  
+There is a file **`ContextService.ts`** that is basically an **empty placeholder** for future “context orchestration.” It doesn’t do anything yet; don’t expect behavior from it.
 
-- [ ] **Containerized vLLM or other engine** — Use the NVIDIA Container Toolkit path if you outgrow Ollama for throughput; keep the **same** external URL shape (**8080**, **`/v1/*`**, **`X-API-Key`** contract) or adjust your deployment docs accordingly.
-- [ ] **Ollama tuning** — Context length, concurrent requests, and GPU layers per model—tune for latency and VRAM on your hardware.
+**IDs you’ll see in `package.json`**  
+Publisher (**`ultra`** in this repo), the Ultra AI sidebar view id **`buildUltra.chat`**, and registered commands such as **Build Ultra: Set Private Compute API Key** and **Build Ultra: Link Workstation Host to Account** are all defined there—useful when tracing bugs or writing docs.
 
 ---
 
-## 8. Workstation operator checklist (private compute)
+## 8. Starting the Workstation API after a restart
 
-The extension’s **Workstation** mode talks to **OpenAI-compatible** HTTP endpoints on **`http://{computeHost}:8080`** (see `buildUltraSettings.getLocalBaseUrl`: `/v1/models` for reachability, `/v1/chat/completions` for chat). It sends the **`X-API-Key`** header from Secret Storage / settings.
+The extension talks to **`http://{computeHost}:8080/v1/*`** (see `buildUltraSettings.getLocalBaseUrl`). Whatever you run on the GPU/Linux box (**Ollama** + **nginx** on 8080 is the common pattern) must be up after reboot.
 
-### 8.1 Already completed (example baseline)
+### Typical stack (systemd: Ollama + nginx)
 
-These steps are **done** on a reference workstation; adjust to your environment.
+```bash
+sudo systemctl status ollama nginx --no-pager
 
-- [x] OS packages updated (`apt update` / `upgrade`).
-- [x] **NVIDIA Container Toolkit** installed; Docker restarted (for future containerized inference if you use it).
-- [x] **Ollama** installed; models pulled (e.g. `qwen2.5-coder:32b`, `deepseek-v2:lite`, `llama3.1:8b`, `mistral-small`).
+sudo systemctl start ollama
+sudo systemctl start nginx
 
-### 8.2 Remaining tasks (do next)
+# Enable on boot if needed
+sudo systemctl enable ollama nginx
 
-- [ ] **Run Ollama as a service** — Ensure `ollama serve` runs after reboot (e.g. verify the `ollama` systemd unit is enabled and active, or your chosen process manager).
-- [ ] **Confirm GPU visibility** — Run `nvidia-smi` and, when loading a model, confirm VRAM usage behaves as expected for your chosen default model.
-- [ ] **Expose port 8080 compatible with the extension** — The extension **always** appends **`:8080`** to `buildUltra.computeHost` (host/name only, no port in that setting). Either:
-  - [ ] Put **nginx** (or another reverse proxy) on **8080**, forward to Ollama’s API (typically **`127.0.0.1:11434`**), and enforce or inject **`X-API-Key`** as your policy requires; **or**
-  - [ ] Run a small OpenAI-compatible gateway on **8080** that fronts Ollama and accepts **`X-API-Key`**.
-- [ ] **Validate the API** — From another machine or via curl on the host:
-  - [ ] `GET http://{host}:8080/v1/models` returns **200** when the same key the extension will use is supplied (if your gateway requires it).
-  - [ ] `POST http://{host}:8080/v1/chat/completions` streams or returns a normal completion for a tiny test payload.
-- [ ] **Align default model name** — Set **`buildUltra.localModelName`** in VS Code to the Ollama model id the gateway forwards (defaults in code include `qwen2.5-coder:32b`; must match what the upstream serves).
-- [ ] **Network & security** — Restrict **8080** to trusted clients (firewall / VPN / bind to localhost + SSH tunnel). **Do not** expose an unauthenticated inference endpoint to the public internet.
-- [ ] **VS Code / Build Ultra** — Set mode to **Workstation**, set **`buildUltra.computeHost`** to the reachable host (**no** `http://` or path), run **Build Ultra: Set Private Compute API Key** so **`X-API-Key`** matches the gateway.
-- [ ] **End-to-end test** — Open Ultra AI chat, confirm the footer shows **Ultra AI compute** **Ready**, send a short prompt, and confirm tool rounds behave if you use coding models.
+# After editing nginx only
+sudo nginx -t && sudo systemctl reload nginx
+```
 
-Optional later:
+### Smoke test on the workstation
 
-- [ ] **Containerized vLLM or other engine** — Use the NVIDIA Container Toolkit path if you outgrow Ollama for throughput; keep the **same** external URL shape (**8080**, **`/v1/*`**, **`X-API-Key`** contract) or adjust your deployment docs accordingly.
-- [ ] **Ollama tuning** — Context length, concurrent requests, and GPU layers per model—tune for latency and VRAM on your hardware.
+```bash
+curl --noproxy '*' -s -o /dev/null -w "%{http_code}\n" \
+  -H "X-API-Key: YOUR_KEY" \
+  http://127.0.0.1:8080/v1/models
+```
+
+Expect **HTTP 200**. If you use a **proxy / VPN**, ensure the machine still listens on the address clients use (`compute_host` in Supabase or VS Code settings).
+
+### Docker-based inference
+
+If Ollama or a gateway runs in containers, start your usual stack (`docker compose up -d`, `docker start`, etc.) so something is listening on **8080** with the same **`X-API-Key`** contract as before.
+
+### Client-side
+
+After the service is healthy, in VS Code use **Request runtime sync** (or sign out/in) so the footer re-pings **Ultra AI compute**; then retry chat.
 
 ---
 
-*Last audited against the repository state at documentation update time.*
+*Aligned with repository inspection; re-run when behavior changes materially.*

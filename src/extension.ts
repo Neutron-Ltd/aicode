@@ -102,12 +102,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.window.registerUriHandler({
-      handleUri: (uri: vscode.Uri) => auth.handleUri(uri),
-    })
-  );
-
-  context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       BuildUltraChatViewProvider.viewType,
       provider,
