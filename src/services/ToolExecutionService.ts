@@ -6,6 +6,7 @@ import { captureTelemetryEvent } from "../telemetry";
 import { isBlockedRelativePath } from "../tooling/toolPathGuards";
 import { looksBinary, MAX_TOOL_FILE_BYTES } from "../tooling/looksBinary";
 import { AsyncSerialQueue } from "./toolExecutionQueue";
+import { appendProblemsSectionToMessage } from "./postEditDiagnostics";
 
 export type ToolCallWire = {
   id: string;
@@ -13,8 +14,17 @@ export type ToolCallWire = {
   function: { name: string; arguments: string };
 };
 
+/** Result of a tool run; `editReview` triggers post-apply Approve/Undo UI in the host. */
+export type ToolExecutionResult = {
+  tool_call_id: string;
+  content: string;
+  name: string;
+  aborted?: string;
+  editReview?: { relativePath: string; highlightRange: vscode.Range };
+};
+
 /**
- * Runs `read_file`, `write_file`, `create_file`, `list_directory` from chat tool_calls.
+ * Runs `read_file`, `write_file`, `search_replace`, `create_file`, `list_directory` from chat tool_calls.
  * Enforces workspace scope and blocks `.env` / `.git` paths.
  * All tool executions are serialized (global queue) to avoid overlapping workspace edits.
  */
@@ -53,8 +63,37 @@ export class ToolExecutionService {
   }
 
   /**
-   * Validates 1-based inclusive line range for write_file; returns 0-based line indices or null.
+   * Match leading indentation of the replaced region: strip common leading whitespace
+   * from the model snippet, then prefix every non-empty line with the file line's indent.
    */
+  private normalizeReplacementIndent(firstLineOfRangeText: string, modelContent: string): string {
+    const lead = firstLineOfRangeText.match(/^[\t ]*/);
+    const baseIndent = lead ? lead[0] : "";
+    const lines = modelContent.split(/\r?\n/);
+    if (lines.length === 0) {
+      return modelContent;
+    }
+    let minLead = Infinity;
+    for (const line of lines) {
+      if (line.length === 0) continue;
+      const m = line.match(/^[\t ]*/);
+      const n = m ? m[0].length : 0;
+      minLead = Math.min(minLead, n);
+    }
+    if (!Number.isFinite(minLead)) {
+      minLead = 0;
+    }
+    return lines
+      .map((line) => {
+        if (line.length === 0) {
+          return "";
+        }
+        const body = minLead > 0 && line.length >= minLead ? line.slice(minLead) : line;
+        return baseIndent + body;
+      })
+      .join("\n");
+  }
+
   private parseWriteFileRange(
     rangeUnknown: unknown,
     lineCount: number
@@ -77,11 +116,27 @@ export class ToolExecutionService {
     return { startLineIdx: sl - 1, endLineIdx: el - 1 };
   }
 
+  /** Non-overlapping occurrences of `needle` in `haystack` (forward scan). */
+  private findAllOccurrences(haystack: string, needle: string): number[] {
+    if (needle.length === 0) {
+      return [];
+    }
+    const out: number[] = [];
+    let i = 0;
+    while (i <= haystack.length - needle.length) {
+      const j = haystack.indexOf(needle, i);
+      if (j === -1) break;
+      out.push(j);
+      i = j + needle.length;
+    }
+    return out;
+  }
+
   async executeOne(
     call: ToolCallWire,
     /** Expected document version before write (from model); mismatch aborts. */
     expectedVersions: Map<string, number>
-  ): Promise<{ tool_call_id: string; content: string; name: string; aborted?: string }> {
+  ): Promise<ToolExecutionResult> {
     return this.queue.runExclusive(async () => {
       const result = await this.executeOneUnqueued(call, expectedVersions);
       this.emitToolTelemetry(result);
@@ -112,7 +167,7 @@ export class ToolExecutionService {
   private async executeOneUnqueued(
     call: ToolCallWire,
     expectedVersions: Map<string, number>
-  ): Promise<{ tool_call_id: string; content: string; name: string; aborted?: string }> {
+  ): Promise<ToolExecutionResult> {
     const id = call.id;
     const name = call.function.name;
     let args: Record<string, unknown>;
@@ -132,6 +187,8 @@ export class ToolExecutionService {
           return await this.readFile(id, name, args);
         case "write_file":
           return await this.writeFile(id, name, args, expectedVersions);
+        case "search_replace":
+          return await this.searchReplace(id, name, args, expectedVersions);
         case "create_file":
           return await this.createFile(id, name, args);
         case "list_directory":
@@ -186,9 +243,9 @@ export class ToolExecutionService {
     name: string,
     args: Record<string, unknown>,
     expectedVersions: Map<string, number>
-  ): Promise<{ tool_call_id: string; content: string; name: string; aborted?: string }> {
+  ): Promise<ToolExecutionResult> {
     const rel = typeof args.path === "string" ? args.path : "";
-    const content = typeof args.content === "string" ? args.content : "";
+    let replacement = typeof args.content === "string" ? args.content : "";
     const uri = this.resolvePath(rel);
     if (!uri) {
       return {
@@ -224,22 +281,175 @@ export class ToolExecutionService {
       };
     }
     const { startLineIdx, endLineIdx } = rangeParsed;
+    const firstLineText = doc.lineAt(startLineIdx).text;
+    replacement = this.normalizeReplacementIndent(firstLineText, replacement);
+
     const edit = new vscode.WorkspaceEdit();
     const startPos = new vscode.Position(startLineIdx, 0);
     const endLineObj = doc.lineAt(endLineIdx);
     const endPos = new vscode.Position(endLineIdx, endLineObj.text.length);
-    edit.replace(uri, new vscode.Range(startPos, endPos), content);
+    edit.replace(uri, new vscode.Range(startPos, endPos), replacement);
 
     const ok = await vscode.workspace.applyEdit(edit);
     if (!ok) {
       return { tool_call_id: id, name, content: "applyEdit failed." };
     }
     recordPreEditSnapshot(uri, textBefore);
-    const after = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+    const afterDoc =
+      vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString()) ??
+      (await vscode.workspace.openTextDocument(uri));
+    const newLineCount = replacement.split(/\r?\n/).length;
+    const endIdx = Math.min(
+      startLineIdx + Math.max(0, newLineCount) - 1,
+      afterDoc.lineCount - 1
+    );
+    const lastLine = afterDoc.lineAt(Math.max(startLineIdx, endIdx));
+    const highlightRange = new vscode.Range(
+      startLineIdx,
+      0,
+      Math.max(startLineIdx, endIdx),
+      lastLine.text.length
+    );
+    const msg = `Wrote ${rel}. New document version: ${afterDoc.version}.`;
+    const toolContent = await appendProblemsSectionToMessage(uri, rel, msg);
     return {
       tool_call_id: id,
       name,
-      content: `Wrote ${rel}. New document version: ${after?.version ?? "?"}.`,
+      content: toolContent,
+      editReview: { relativePath: rel, highlightRange },
+    };
+  }
+
+  private async searchReplace(
+    id: string,
+    name: string,
+    args: Record<string, unknown>,
+    expectedVersions: Map<string, number>
+  ): Promise<ToolExecutionResult> {
+    const rel = typeof args.path === "string" ? args.path : "";
+    const old_string = typeof args.old_string === "string" ? args.old_string : "";
+    const new_string = typeof args.new_string === "string" ? args.new_string : "";
+    const replaceAll = args.replace_all === true;
+
+    if (old_string.length === 0 || /^\s+$/.test(old_string)) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          "Error: search_replace requires non-empty old_string (copy the exact text from the latest read_file). Whitespace-only old_string is not allowed.",
+      };
+    }
+
+    const uri = this.resolvePath(rel);
+    if (!uri) {
+      return {
+        tool_call_id: id,
+        name,
+        content: "Path is blocked or outside workspace.",
+      };
+    }
+
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    if (bytes.byteLength > MAX_TOOL_FILE_BYTES) {
+      return {
+        tool_call_id: id,
+        name,
+        content: `File is larger than ${MAX_TOOL_FILE_BYTES} bytes; use a different approach.`,
+      };
+    }
+    if (looksBinary(bytes)) {
+      return {
+        tool_call_id: id,
+        name,
+        content: "File appears binary or non-text (skipped for safety).",
+      };
+    }
+
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const textBefore = doc.getText();
+    const expected = expectedVersions.get(rel);
+    if (expected !== undefined && doc.version !== expected) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          `Document version mismatch (was ${expected}, now ${doc.version}). Re-read the file and retry.`,
+        aborted: "version_mismatch",
+      };
+    }
+
+    const matches = this.findAllOccurrences(textBefore, old_string);
+    if (matches.length === 0) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          "Error: old_string not found in file. Call read_file on this path and copy the exact text (including indentation and line endings as returned).",
+      };
+    }
+    if (!replaceAll && matches.length > 1) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          `Error: old_string matched ${matches.length} times. Include more surrounding context so the match is unique, or set replace_all to true.`,
+      };
+    }
+
+    const norms: string[] = [];
+    for (const st of matches) {
+      const lineIdx = doc.positionAt(st).line;
+      const firstLineText = doc.lineAt(lineIdx).text;
+      norms.push(this.normalizeReplacementIndent(firstLineText, new_string));
+    }
+
+    let highlightEnd = matches[0];
+    for (let i = 0; i < matches.length; i++) {
+      const norm = norms[i];
+      if (i === 0) {
+        highlightEnd = matches[0] + norm.length;
+      } else {
+        highlightEnd += matches[i] - matches[i - 1] - old_string.length + norm.length;
+      }
+    }
+    const highlightStart = matches[0];
+
+    const edit = new vscode.WorkspaceEdit();
+    const sortedIdx = [...matches.keys()].sort((a, b) => matches[b] - matches[a]);
+    for (const ki of sortedIdx) {
+      const st = matches[ki];
+      const end = st + old_string.length;
+      const norm = norms[ki];
+      edit.replace(
+        uri,
+        new vscode.Range(doc.positionAt(st), doc.positionAt(end)),
+        norm
+      );
+    }
+
+    const ok = await vscode.workspace.applyEdit(edit);
+    if (!ok) {
+      return { tool_call_id: id, name, content: "applyEdit failed." };
+    }
+    recordPreEditSnapshot(uri, textBefore);
+
+    const afterDoc =
+      vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString()) ??
+      (await vscode.workspace.openTextDocument(uri));
+
+    const startPos = afterDoc.positionAt(Math.min(highlightStart, afterDoc.getText().length));
+    const endOffset = Math.min(highlightEnd, afterDoc.getText().length);
+    const endPos = afterDoc.positionAt(endOffset);
+    const highlightRange = new vscode.Range(startPos, endPos);
+
+    const countLabel = matches.length === 1 ? "1 occurrence" : `${matches.length} occurrences`;
+    const msg = `Updated ${rel} (${countLabel}). New document version: ${afterDoc.version}.`;
+    const toolContent = await appendProblemsSectionToMessage(uri, rel, msg);
+    return {
+      tool_call_id: id,
+      name,
+      content: toolContent,
+      editReview: { relativePath: rel, highlightRange },
     };
   }
 
@@ -247,9 +457,9 @@ export class ToolExecutionService {
     id: string,
     name: string,
     args: Record<string, unknown>
-  ): Promise<{ tool_call_id: string; content: string; name: string }> {
+  ): Promise<ToolExecutionResult> {
     const rel = typeof args.path === "string" ? args.path : "";
-    const content = typeof args.content === "string" ? args.content : "";
+    const fileBody = typeof args.content === "string" ? args.content : "";
     const uri = this.resolvePath(rel);
     if (!uri) {
       return {
@@ -267,9 +477,20 @@ export class ToolExecutionService {
     }
     await fs.mkdir(path.dirname(uri.fsPath), { recursive: true });
     const enc = new TextEncoder();
-    await vscode.workspace.fs.writeFile(uri, enc.encode(content));
+    await vscode.workspace.fs.writeFile(uri, enc.encode(fileBody));
     recordPreEditSnapshot(uri, textBefore);
-    return { tool_call_id: id, name, content: `Created ${rel}.` };
+    const afterDoc = await vscode.workspace.openTextDocument(uri);
+    const lastIdx = Math.max(0, afterDoc.lineCount - 1);
+    const lastLine = afterDoc.lineAt(lastIdx);
+    const highlightRange = new vscode.Range(0, 0, lastIdx, lastLine.text.length);
+    const msg = `Created ${rel}.`;
+    const toolContent = await appendProblemsSectionToMessage(uri, rel, msg);
+    return {
+      tool_call_id: id,
+      name,
+      content: toolContent,
+      editReview: { relativePath: rel, highlightRange },
+    };
   }
 
   private async listDir(

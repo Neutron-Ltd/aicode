@@ -1,17 +1,17 @@
 import * as vscode from "vscode";
-import { openMutationDiffAndConfirm } from "../diffReview";
+import { clearPreEditSnapshot, getPreEditSnapshot } from "../aiUndoTelemetry";
 import { streamOpenAiCompatibleSse } from "../openAiCompatibleStream";
+import { tryRecoverToolCallsFromAssistantText } from "../toolCallTextRecovery";
+import { showChangedRangeHighlight, clearHighlight } from "../mutationHighlight";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import type { BuildUltraSettings } from "../buildUltraSettings";
 import { assembleChatMessages } from "../chatPrompt/assembleMessages";
 import { buildWorkstationChatRequestBody } from "../chatPrompt/workstationRequest";
 import type { ChatPayload } from "../types/chatPayload";
 import type { HostToWebviewMessage } from "../shared/messages";
-import { buildToolPlanSteps } from "../toolPlanParse";
-import type { BuildUltraPreviewProvider } from "../virtualDocumentProvider";
 import type { AuthService } from "./AuthService";
 import type { PromptBuilderService } from "./PromptBuilderService";
-import type { ToolCallWire, ToolExecutionService } from "./ToolExecutionService";
+import type { ToolCallWire, ToolExecutionResult, ToolExecutionService } from "./ToolExecutionService";
 
 const MAX_TOOL_ROUNDS = 8;
 
@@ -40,31 +40,90 @@ type Conv = NonNullable<ChatPayload["conversationOverride"]>;
  * Upstream API keys for **Cloud** stay in Edge env. **Workstation** uses the compute API key from Secret Storage.
  */
 export class ApiService {
-  private readonly planResolvers = new Map<string, (ok: boolean) => void>();
+  private readonly editReviewUris = new Map<string, vscode.Uri>();
 
   constructor(
     private readonly settings: BuildUltraSettings,
     private readonly auth: AuthService,
     private readonly promptBuilder: PromptBuilderService,
     private readonly tools: ToolExecutionService,
-    private readonly previewProvider: BuildUltraPreviewProvider,
     private readonly postToWebview: (msg: HostToWebviewMessage) => void
   ) {}
 
-  /**
-   * Invoked when the webview confirms or cancels a pending AI tool plan.
-   */
-  handleToolPlanResolution(planId: string, confirmed: boolean): void {
-    const resolve = this.planResolvers.get(planId);
-    if (resolve) {
-      this.planResolvers.delete(planId);
-      resolve(confirmed);
+  /** Legacy no-op (tool plan UI removed). */
+  handleToolPlanResolution(_planId: string, _confirmed: boolean): void {}
+
+  handleEditReviewApprove(reviewId: string): void {
+    const uri = this.editReviewUris.get(reviewId);
+    if (!uri) {
+      return;
     }
+    clearHighlight(uri);
+    clearPreEditSnapshot(uri);
+    this.editReviewUris.delete(reviewId);
+    this.postToWebview({ type: "EDIT_REVIEW_CLEARED", payload: { reviewId } });
   }
 
-  private waitForToolPlan(planId: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.planResolvers.set(planId, resolve);
+  handleEditReviewUndo(reviewId: string): void {
+    const uri = this.editReviewUris.get(reviewId);
+    if (!uri) {
+      return;
+    }
+    const snapshot = getPreEditSnapshot(uri);
+    if (snapshot === undefined) {
+      clearHighlight(uri);
+      this.editReviewUris.delete(reviewId);
+      this.postToWebview({ type: "EDIT_REVIEW_CLEARED", payload: { reviewId } });
+      return;
+    }
+    void vscode.workspace.openTextDocument(uri).then((doc) => {
+      const edit = new vscode.WorkspaceEdit();
+      const fullRange = new vscode.Range(
+        doc.positionAt(0),
+        doc.positionAt(doc.getText().length)
+      );
+      edit.replace(uri, fullRange, snapshot);
+      void vscode.workspace.applyEdit(edit).then(() => {
+        clearHighlight(uri);
+        clearPreEditSnapshot(uri);
+        this.editReviewUris.delete(reviewId);
+        this.postToWebview({ type: "EDIT_REVIEW_CLEARED", payload: { reviewId } });
+      });
+    });
+  }
+
+  private flushAssistantVisibleText(assistantId: string, assistantText: string): void {
+    this.postToWebview({
+      type: "CHAT_ASSISTANT_CONTENT",
+      payload: { id: assistantId, content: assistantText },
+    });
+  }
+
+  private async afterSuccessfulFileTool(result: ToolExecutionResult): Promise<void> {
+    if (!result.editReview) {
+      return;
+    }
+    const uri = this.tools.resolveAllowedPath(result.editReview.relativePath);
+    if (!uri) {
+      return;
+    }
+    for (const [rid, u] of [...this.editReviewUris.entries()]) {
+      if (u.toString() === uri.toString()) {
+        clearHighlight(u);
+        this.editReviewUris.delete(rid);
+        this.postToWebview({ type: "EDIT_REVIEW_CLEARED", payload: { reviewId: rid } });
+      }
+    }
+    try {
+      await showChangedRangeHighlight(uri, result.editReview.highlightRange);
+    } catch {
+      /* ignore */
+    }
+    const reviewId = `er-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    this.editReviewUris.set(reviewId, uri);
+    this.postToWebview({
+      type: "EDIT_REVIEW_PENDING",
+      payload: { reviewId, relativePath: result.editReview.relativePath },
     });
   }
 
@@ -102,60 +161,12 @@ export class ApiService {
   }
 
   /**
-   * After webview plan approval: optional `vscode.diff` for mutations, then execute tool.
+   * Apply tool calls directly (no pre-confirm diff or modal).
    */
   private async maybeConfirmThenExecute(
     tc: ToolCallWire,
     expectedVersions: Map<string, number>
-  ): Promise<{ tool_call_id: string; content: string; name: string; aborted?: string }> {
-    const name = tc.function.name;
-    if (name !== "write_file" && name !== "create_file") {
-      return this.tools.executeOne(tc, expectedVersions);
-    }
-    let args: Record<string, unknown>;
-    try {
-      args = JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
-    } catch {
-      return this.tools.executeOne(tc, expectedVersions);
-    }
-    const rel = typeof args.path === "string" ? args.path : "";
-    const uri = this.tools.resolveAllowedPath(rel);
-    if (!uri) {
-      return this.tools.executeOne(tc, expectedVersions);
-    }
-    const proposed = typeof args.content === "string" ? args.content : "";
-    let currentText = "";
-    try {
-      const doc = await vscode.workspace.openTextDocument(uri);
-      currentText = doc.getText();
-    } catch {
-      currentText = "";
-    }
-    const range =
-      name === "write_file"
-        ? (args.range as { startLine?: number; endLine?: number } | undefined)
-        : undefined;
-
-    this.postMutationProgress(
-      `Review diff for "${rel || "(file)"}" — a compare view opens in VS Code. Use Apply or Skip in the dialog.`,
-      true
-    );
-
-    const confirmed = await openMutationDiffAndConfirm({
-      provider: this.previewProvider,
-      title: "Ultra AI",
-      relPath: rel || "(file)",
-      currentText,
-      proposedText: proposed,
-      range,
-    });
-    if (!confirmed) {
-      return {
-        tool_call_id: tc.id,
-        name,
-        content: "User skipped applying this edit after review.",
-      };
-    }
+  ): Promise<ToolExecutionResult> {
     return this.tools.executeOne(tc, expectedVersions);
   }
 
@@ -238,9 +249,10 @@ export class ApiService {
         let toolCalls: ToolCallWire[] = [];
         let assistantText = "";
         if (contentType.includes("text/event-stream")) {
-          const r = await this.streamSse(response, assistantId);
+          const r = await this.streamSse(response, assistantId, { bufferAssistantDeltas: true });
           toolCalls = r.toolCalls;
           assistantText = r.assistantText;
+          this.flushAssistantVisibleText(assistantId, assistantText);
         } else {
           await this.handleNonStreamBody(response, assistantId);
         }
@@ -259,27 +271,13 @@ export class ApiService {
           tool_calls: toolCalls,
         };
 
-        const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        const steps = buildToolPlanSteps(toolCalls);
-        this.postToWebview({
-          type: "TOOL_PLAN_PENDING",
-          payload: { planId, steps },
-        });
-
-        const planConfirmed = await this.waitForToolPlan(planId);
-        this.postToWebview({ type: "TOOL_PLAN_CLEARED", payload: { planId } });
-
-        if (!planConfirmed) {
-          this.clearMutationProgress();
-          break;
-        }
-
         const expectedVersions = new Map<string, number>();
         const toolMsgs: Conv = [];
-        this.postMutationProgress("Running approved tools…");
+        this.postMutationProgress("Applying tools…");
         for (const tc of toolCalls) {
           this.postMutationProgress(this.progressLineForTool(tc));
           const result = await this.maybeConfirmThenExecute(tc, expectedVersions);
+          await this.afterSuccessfulFileTool(result);
           toolMsgs.push({
             role: "tool",
             content: result.content,
@@ -476,23 +474,23 @@ export class ApiService {
         let assistantText = "";
         let roundUsage: number | null = null;
         if (contentType.includes("text/event-stream")) {
-          const r = await streamOpenAiCompatibleSse(response, (delta) => {
-            this.postToWebview({
-              type: "CHAT_STREAM_DELTA",
-              payload: { id: assistantId, delta },
-            });
-          });
+          const r = await streamOpenAiCompatibleSse(
+            response,
+            () => {
+              /* buffered — flushed below */
+            },
+            { emitContentDeltas: false }
+          );
           toolCalls = r.toolCalls;
           assistantText = r.assistantText;
           roundUsage = r.usageTotalTokens;
+          this.flushAssistantVisibleText(assistantId, assistantText);
         } else {
-          const nr = await this.parseOpenAiNonStreamResponse(
-            response,
-            assistantId
-          );
+          const nr = await this.parseOpenAiNonStreamResponse(response, assistantId, false);
           toolCalls = nr.toolCalls;
           assistantText = nr.assistantText;
           roundUsage = nr.usageTotalTokens;
+          this.flushAssistantVisibleText(assistantId, assistantText);
         }
 
         const promptChars = JSON.stringify(requestBody).length;
@@ -516,27 +514,13 @@ export class ApiService {
           tool_calls: toolCalls,
         };
 
-        const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        const steps = buildToolPlanSteps(toolCalls);
-        this.postToWebview({
-          type: "TOOL_PLAN_PENDING",
-          payload: { planId, steps },
-        });
-
-        const planConfirmed = await this.waitForToolPlan(planId);
-        this.postToWebview({ type: "TOOL_PLAN_CLEARED", payload: { planId } });
-
-        if (!planConfirmed) {
-          this.clearMutationProgress();
-          break;
-        }
-
         const expectedVersions = new Map<string, number>();
         const toolMsgs: Conv = [];
-        this.postMutationProgress("Running approved tools…");
+        this.postMutationProgress("Applying tools…");
         for (const tc of toolCalls) {
           this.postMutationProgress(this.progressLineForTool(tc));
           const result = await this.maybeConfirmThenExecute(tc, expectedVersions);
+          await this.afterSuccessfulFileTool(result);
           toolMsgs.push({
             role: "tool",
             content: result.content,
@@ -601,11 +585,13 @@ export class ApiService {
 
   private async parseOpenAiNonStreamResponse(
     response: Response,
-    assistantId: string
+    assistantId: string,
+    emitStreamDeltasToWebview: boolean
   ): Promise<{
     toolCalls: ToolCallWire[];
     assistantText: string;
     usageTotalTokens: number | null;
+    contentRecoveryApplied: boolean;
   }> {
     const text = await response.text();
     let toolCalls: ToolCallWire[] = [];
@@ -631,10 +617,12 @@ export class ApiService {
       const msg = j.choices?.[0]?.message;
       if (typeof msg?.content === "string" && msg.content.length > 0) {
         assistantText = msg.content;
-        this.postToWebview({
-          type: "CHAT_STREAM_DELTA",
-          payload: { id: assistantId, delta: msg.content },
-        });
+        if (emitStreamDeltasToWebview) {
+          this.postToWebview({
+            type: "CHAT_STREAM_DELTA",
+            payload: { id: assistantId, delta: msg.content },
+          });
+        }
       }
       const tcs = msg?.tool_calls;
       if (Array.isArray(tcs)) {
@@ -656,14 +644,25 @@ export class ApiService {
       }
     } catch {
       if (text.trim()) {
-        this.postToWebview({
-          type: "CHAT_STREAM_DELTA",
-          payload: { id: assistantId, delta: text.slice(0, 20_000) },
-        });
+        if (emitStreamDeltasToWebview) {
+          this.postToWebview({
+            type: "CHAT_STREAM_DELTA",
+            payload: { id: assistantId, delta: text.slice(0, 20_000) },
+          });
+        }
         assistantText = text;
       }
     }
-    return { toolCalls, assistantText, usageTotalTokens };
+    let contentRecoveryApplied = false;
+    if (toolCalls.length === 0 && assistantText.length > 0) {
+      const recovered = tryRecoverToolCallsFromAssistantText(assistantText);
+      if (recovered.toolCalls.length > 0) {
+        toolCalls = recovered.toolCalls;
+        assistantText = recovered.displayText;
+        contentRecoveryApplied = true;
+      }
+    }
+    return { toolCalls, assistantText, usageTotalTokens, contentRecoveryApplied };
   }
 
   private postChatError(message: string, kind?: "maintenance"): void {
@@ -707,8 +706,11 @@ export class ApiService {
 
   private async streamSse(
     response: Response,
-    assistantId: string
+    assistantId: string,
+    options?: { bufferAssistantDeltas?: boolean }
   ): Promise<{ toolCalls: ToolCallWire[]; assistantText: string }> {
+    const bufferAssistantDeltas = options?.bufferAssistantDeltas === true;
+    const postAssistantDeltas = !bufferAssistantDeltas;
     const body = response.body;
     if (!body) {
       throw new Error("Empty response body from chat function.");
@@ -730,14 +732,14 @@ export class ApiService {
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
         for (const line of lines) {
-          const r = this.processSseLine(line, assistantId);
+          const r = this.processSseLine(line, assistantId, postAssistantDeltas);
           if (r.toolCalls.length) lastToolCalls = r.toolCalls;
           assistantText += r.deltaChunk;
         }
       }
       if (buffer.trim()) {
         for (const line of buffer.split("\n")) {
-          const r = this.processSseLine(line, assistantId);
+          const r = this.processSseLine(line, assistantId, postAssistantDeltas);
           if (r.toolCalls.length) lastToolCalls = r.toolCalls;
           assistantText += r.deltaChunk;
         }
@@ -745,12 +747,20 @@ export class ApiService {
     } finally {
       reader.releaseLock();
     }
+    if (lastToolCalls.length === 0 && assistantText.length > 0) {
+      const recovered = tryRecoverToolCallsFromAssistantText(assistantText);
+      if (recovered.toolCalls.length > 0) {
+        lastToolCalls = recovered.toolCalls;
+        assistantText = recovered.displayText;
+      }
+    }
     return { toolCalls: lastToolCalls, assistantText };
   }
 
   private processSseLine(
     line: string,
-    assistantId: string
+    assistantId: string,
+    postAssistantDeltas: boolean
   ): { toolCalls: ToolCallWire[]; deltaChunk: string } {
     const trimmed = line.trimEnd();
     if (!trimmed.startsWith("data:")) {
@@ -781,10 +791,12 @@ export class ApiService {
         };
       }
       if (typeof parsed.delta === "string" && parsed.delta.length > 0) {
-        this.postToWebview({
-          type: "CHAT_STREAM_DELTA",
-          payload: { id: assistantId, delta: parsed.delta },
-        });
+        if (postAssistantDeltas) {
+          this.postToWebview({
+            type: "CHAT_STREAM_DELTA",
+            payload: { id: assistantId, delta: parsed.delta },
+          });
+        }
         return { toolCalls: [], deltaChunk: parsed.delta };
       }
       return { toolCalls: [], deltaChunk: "" };
@@ -794,10 +806,12 @@ export class ApiService {
         if (t.startsWith("{") || t.startsWith("[")) {
           return { toolCalls: [], deltaChunk: "" };
         }
-        this.postToWebview({
-          type: "CHAT_STREAM_DELTA",
-          payload: { id: assistantId, delta: data },
-        });
+        if (postAssistantDeltas) {
+          this.postToWebview({
+            type: "CHAT_STREAM_DELTA",
+            payload: { id: assistantId, delta: data },
+          });
+        }
         return { toolCalls: [], deltaChunk: data };
       }
       throw e;
@@ -822,8 +836,8 @@ export class ApiService {
     }
     if (content) {
       this.postToWebview({
-        type: "CHAT_STREAM_DELTA",
-        payload: { id: assistantId, delta: content },
+        type: "CHAT_ASSISTANT_CONTENT",
+        payload: { id: assistantId, content },
       });
     }
   }

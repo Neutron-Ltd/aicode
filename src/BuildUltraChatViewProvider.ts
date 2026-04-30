@@ -276,6 +276,14 @@ export class BuildUltraChatViewProvider implements vscode.WebviewViewProvider {
         this._api?.handleToolPlanResolution(msg.payload.planId, false);
         break;
       }
+      case "EDIT_REVIEW_APPROVE": {
+        this._api?.handleEditReviewApprove(msg.payload.reviewId);
+        break;
+      }
+      case "EDIT_REVIEW_UNDO": {
+        this._api?.handleEditReviewUndo(msg.payload.reviewId);
+        break;
+      }
       case "FOCUS_EDITOR_GROUPS":
         void vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
         break;

@@ -57,8 +57,12 @@
 
 ### 3.4 Direct file manipulation (agentic editing)
 
-- ✅ **Tool loop** — `ApiService` recursive rounds with `read_file`, `write_file`, `create_file`, `list_directory` (`openAiTools.ts`); **no `delete_file`** tool in codebase.
+- ✅ **Tool loop** — `ApiService` recursive rounds with `read_file`, `write_file`, `search_replace`, `create_file`, `list_directory` (`openAiTools.ts`); **no `delete_file`** tool in codebase.
 - ✅ **Line range for `write_file`** — Schema + `ToolExecutionService` enforcement.
+- ✅ **`search_replace`** — Exact substring replacement (unique match or `replace_all`); reduces wrong splice errors from stale line numbers.
+- ✅ **Post-edit diagnostics** — After successful file mutations, tool responses can include a `## Problems` section (VS Code errors/warnings for that file) from `postEditDiagnostics.ts`.
+- ✅ **`search_replace`** — Exact substring replacement (unique match or `replace_all`); reduces wrong splice errors from stale line numbers.
+- ✅ **Post-edit diagnostics** — After successful file mutations, tool responses can include a `## Problems` section (VS Code errors/warnings for that file) from `postEditDiagnostics.ts`.
 - ✅ **`vscode.WorkspaceEdit`** — Edits for undo consistency.
 
 ### 3.5 Codebase indexing and semantic context (cloud RAG)

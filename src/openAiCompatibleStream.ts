@@ -1,4 +1,5 @@
 import type { ToolCallWire } from "./services/ToolExecutionService";
+import { tryRecoverToolCallsFromAssistantText } from "./toolCallTextRecovery";
 
 type ToolCallAcc = Map<
   number,
@@ -76,18 +77,22 @@ function finalizeToolCalls(acc: ToolCallAcc): ToolCallWire[] {
 }
 
 /**
- * Parses native OpenAI-compatible SSE (choices[0].delta), streams text to the webview,
- * accumulates tool call fragments, and returns finalized tool calls after the stream ends.
+ * Parses native OpenAI-compatible SSE (choices[0].delta). Optionally streams text to the webview.
+ * When `emitContentDeltas` is false, assistant text is accumulated only (no partial JSON in UI).
  */
 export async function streamOpenAiCompatibleSse(
   response: Response,
-  onTextDelta: (delta: string) => void
+  onTextDelta: (delta: string) => void,
+  options?: { emitContentDeltas?: boolean }
 ): Promise<{
   toolCalls: ToolCallWire[];
   assistantText: string;
   /** Last non-null `usage.total_tokens` from any SSE JSON chunk (OpenAI-style). */
   usageTotalTokens: number | null;
+  /** True when tool calls were parsed from assistant text (JSON-in-content fallback). */
+  contentRecoveryApplied: boolean;
 }> {
+  const emitContentDeltas = options?.emitContentDeltas !== false;
   const body = response.body;
   if (!body) {
     throw new Error("Empty response body from chat endpoint.");
@@ -136,7 +141,9 @@ export async function streamOpenAiCompatibleSse(
         const piece = extractAssistantDeltaText(chunk);
         if (piece !== null) {
           assistantText += piece;
-          onTextDelta(piece);
+          if (emitContentDeltas) {
+            onTextDelta(piece);
+          }
         }
       }
     }
@@ -156,7 +163,9 @@ export async function streamOpenAiCompatibleSse(
             const piece = extractAssistantDeltaText(chunk);
             if (piece !== null) {
               assistantText += piece;
-              onTextDelta(piece);
+              if (emitContentDeltas) {
+                onTextDelta(piece);
+              }
             }
           } catch {
             /* ignore */
@@ -168,9 +177,21 @@ export async function streamOpenAiCompatibleSse(
     reader.releaseLock();
   }
 
+  let toolCalls = finalizeToolCalls(toolAcc);
+  let contentRecoveryApplied = false;
+  if (toolCalls.length === 0 && assistantText.length > 0) {
+    const recovered = tryRecoverToolCallsFromAssistantText(assistantText);
+    if (recovered.toolCalls.length > 0) {
+      toolCalls = recovered.toolCalls;
+      assistantText = recovered.displayText;
+      contentRecoveryApplied = true;
+    }
+  }
+
   return {
-    toolCalls: finalizeToolCalls(toolAcc),
+    toolCalls,
     assistantText,
     usageTotalTokens,
+    contentRecoveryApplied,
   };
 }

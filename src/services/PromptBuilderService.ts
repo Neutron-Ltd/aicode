@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ChatPayload } from "../types/chatPayload";
 import type { EditorService } from "./EditorService";
+import { formatDiagnosticsSummary } from "./postEditDiagnostics";
 import type { TerminalService } from "./TerminalService";
 
 /** Matches Edge `buildContextUserMessage` — RAG omitted on tool follow-ups. */
@@ -42,26 +43,7 @@ export class PromptBuilderService {
     if (!editor) {
       return "";
     }
-    const diags = vscode.languages.getDiagnostics(editor.document.uri);
-    if (diags.length === 0) {
-      return "";
-    }
-    const lines: string[] = [];
-    for (const d of diags.slice(0, 40)) {
-      const start = d.range.start;
-      const loc = `${start.line + 1}:${start.character + 1}`;
-      const sev =
-        d.severity === vscode.DiagnosticSeverity.Error
-          ? "error"
-          : d.severity === vscode.DiagnosticSeverity.Warning
-            ? "warning"
-            : "info";
-      lines.push(`- [${sev}] ${loc} ${d.message.replace(/\s+/g, " ").trim()}`);
-    }
-    if (diags.length > 40) {
-      lines.push(`- … and ${diags.length - 40} more diagnostic(s).`);
-    }
-    return lines.join("\n");
+    return formatDiagnosticsSummary(editor.document.uri, { maxItems: 40 });
   }
 
   /**

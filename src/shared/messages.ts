@@ -13,6 +13,8 @@ export type WebviewToHostMessage =
   | { type: "LOGOUT_REQUEST" }
   | { type: "TOOL_PLAN_CONFIRM"; payload: { planId: string } }
   | { type: "TOOL_PLAN_CANCEL"; payload: { planId: string } }
+  | { type: "EDIT_REVIEW_APPROVE"; payload: { reviewId: string } }
+  | { type: "EDIT_REVIEW_UNDO"; payload: { reviewId: string } }
   | { type: "REQUEST_RUNTIME_SYNC" }
   /** Bring keyboard focus to editor / diff area (mutation review). */
   | { type: "FOCUS_EDITOR_GROUPS" };
@@ -38,6 +40,8 @@ export type HostToWebviewMessage =
   | { type: "CHAT_STREAM_START"; payload: { id: string } }
   /** Append token/text to the assistant message with the given id. */
   | { type: "CHAT_STREAM_DELTA"; payload: { id: string; delta: string } }
+  /** Replace full assistant message content (e.g. after stripping recovered tool JSON from streamed text). */
+  | { type: "CHAT_ASSISTANT_CONTENT"; payload: { id: string; content: string } }
   /** Stream finished successfully. */
   | { type: "CHAT_STREAM_END"; payload: { id: string } }
   /** Chat / Edge / network failure (distinct from AUTH_ERROR). */
@@ -70,6 +74,11 @@ export type HostToWebviewMessage =
       type: "MUTATION_PROGRESS";
       payload: { line: string; diffAwaiting?: boolean };
     }
+  | {
+      type: "EDIT_REVIEW_PENDING";
+      payload: { reviewId: string; relativePath: string };
+    }
+  | { type: "EDIT_REVIEW_CLEARED"; payload: { reviewId: string } }
   | {
       type: "RUNTIME_CONFIG";
       payload: {
@@ -153,6 +162,20 @@ export function parseWebviewMessage(raw: unknown): WebviewToHostMessage | null {
       if (typeof planId !== "string") return null;
       return { type: "TOOL_PLAN_CANCEL", payload: { planId } };
     }
+    case "EDIT_REVIEW_APPROVE": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const reviewId = p.reviewId;
+      if (typeof reviewId !== "string") return null;
+      return { type: "EDIT_REVIEW_APPROVE", payload: { reviewId } };
+    }
+    case "EDIT_REVIEW_UNDO": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const reviewId = p.reviewId;
+      if (typeof reviewId !== "string") return null;
+      return { type: "EDIT_REVIEW_UNDO", payload: { reviewId } };
+    }
     case "REQUEST_RUNTIME_SYNC":
       return { type: "REQUEST_RUNTIME_SYNC" };
     case "FOCUS_EDITOR_GROUPS":
@@ -229,6 +252,14 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       const delta = p.delta;
       if (typeof id !== "string" || typeof delta !== "string") return null;
       return { type: "CHAT_STREAM_DELTA", payload: { id, delta } };
+    }
+    case "CHAT_ASSISTANT_CONTENT": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const id = p.id;
+      const content = p.content;
+      if (typeof id !== "string" || typeof content !== "string") return null;
+      return { type: "CHAT_ASSISTANT_CONTENT", payload: { id, content } };
     }
     case "CHAT_STREAM_END": {
       const p = raw.payload;
@@ -311,6 +342,21 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       if (typeof line !== "string") return null;
       const diffAwaiting = p.diffAwaiting === true;
       return { type: "MUTATION_PROGRESS", payload: { line, diffAwaiting } };
+    }
+    case "EDIT_REVIEW_PENDING": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const reviewId = p.reviewId;
+      const relativePath = p.relativePath;
+      if (typeof reviewId !== "string" || typeof relativePath !== "string") return null;
+      return { type: "EDIT_REVIEW_PENDING", payload: { reviewId, relativePath } };
+    }
+    case "EDIT_REVIEW_CLEARED": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const reviewId = p.reviewId;
+      if (typeof reviewId !== "string") return null;
+      return { type: "EDIT_REVIEW_CLEARED", payload: { reviewId } };
     }
     case "RUNTIME_CONFIG": {
       const p = raw.payload;

@@ -10,7 +10,7 @@ import { ToolExecutionService } from "./services/ToolExecutionService";
 import { BuildUltraChatViewProvider } from "./BuildUltraChatViewProvider";
 import { registerAiUndoTelemetry } from "./aiUndoTelemetry";
 import { initExtensionTelemetry, shutdownExtensionTelemetry } from "./telemetry";
-import { BuildUltraPreviewProvider } from "./virtualDocumentProvider";
+import { disposeMutationHighlightDecorations } from "./mutationHighlight";
 
 export function activate(context: vscode.ExtensionContext): void {
   initExtensionTelemetry(context);
@@ -29,19 +29,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const toolExecution = new ToolExecutionService(
     () => vscode.workspace.workspaceFolders?.[0]?.uri ?? null
   );
-  const previewProvider = new BuildUltraPreviewProvider();
-  context.subscriptions.push(
-    vscode.workspace.registerTextDocumentContentProvider(
-      "buildultra-preview",
-      previewProvider
-    )
-  );
   const api = new ApiService(
     ultraSettings,
     auth,
     promptBuilder,
     toolExecution,
-    previewProvider,
     (msg) => provider.postHostMessage(msg)
   );
   const scanner = new WorkspaceScannerService(
@@ -114,6 +106,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(terminalService);
   context.subscriptions.push(registerAiUndoTelemetry());
+  context.subscriptions.push({ dispose: () => disposeMutationHighlightDecorations() });
 }
 
 export function deactivate(): Thenable<void> | void {

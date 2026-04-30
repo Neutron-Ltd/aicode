@@ -16,6 +16,14 @@ export function recordPreEditSnapshot(uri: vscode.Uri, textBefore: string): void
   });
 }
 
+export function getPreEditSnapshot(uri: vscode.Uri): string | undefined {
+  return pendingPreEdit.get(uri.toString())?.textBefore;
+}
+
+export function clearPreEditSnapshot(uri: vscode.Uri): void {
+  pendingPreEdit.delete(uri.toString());
+}
+
 /**
  * If document text returns to the pre-AI snapshot within UNDO_WINDOW_MS, emit `user_undo_action`.
  * Heuristic: matches full-document undo (or manual restore to identical text).

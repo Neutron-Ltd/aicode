@@ -46,6 +46,8 @@ export interface UltraState {
   messages: ChatMessage[];
   inputDraft: string;
   isSending: boolean;
+  /** After AI writes a file: user can Undo or Approve in chat. */
+  pendingEditReview: { reviewId: string; relativePath: string } | null;
   /** AI tool batch awaiting Confirm / Cancel in the webview. */
   pendingToolPlan: PendingToolPlan | null;
   /** Per-tool execution line + optional diff-review hint (after plan confirmed). */
@@ -65,6 +67,8 @@ export interface UltraState {
   dismissServiceMaintenance: () => void;
   confirmToolPlan: () => void;
   cancelToolPlan: () => void;
+  approveEditReview: () => void;
+  undoEditReview: () => void;
   requestRuntimeSync: () => void;
   focusEditorGroups: () => void;
 }
@@ -90,6 +94,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   messages: [],
   inputDraft: "",
   isSending: false,
+  pendingEditReview: null,
   pendingToolPlan: null,
   mutationProgress: null,
 
@@ -186,6 +191,13 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           ),
         }));
         break;
+      case "CHAT_ASSISTANT_CONTENT":
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === msg.payload.id ? { ...m, content: msg.payload.content } : m
+          ),
+        }));
+        break;
       case "CHAT_STREAM_END":
         set((s) => {
           const last = s.messages[s.messages.length - 1];
@@ -259,6 +271,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           inputDraft: "",
           pendingToolPlan: null,
           mutationProgress: null,
+          pendingEditReview: null,
           workstationOnline: false,
           workstationCheckedAt: null,
           computeStatusHint: null,
@@ -290,12 +303,27 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           set({
             mutationProgress: {
               line,
-              diffAwaiting: Boolean(msg.payload.diffAwaiting),
+              diffAwaiting: false,
             },
           });
         }
         break;
       }
+      case "EDIT_REVIEW_PENDING":
+        set({
+          pendingEditReview: {
+            reviewId: msg.payload.reviewId,
+            relativePath: msg.payload.relativePath,
+          },
+        });
+        break;
+      case "EDIT_REVIEW_CLEARED":
+        set((s) =>
+          s.pendingEditReview?.reviewId === msg.payload.reviewId
+            ? { pendingEditReview: null }
+            : {}
+        );
+        break;
     }
   },
 
@@ -327,7 +355,8 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   sendUserMessage: () => {
-    const { inputDraft, pendingToolPlan, quotaReady, tokenQuota } = get();
+    const { inputDraft, pendingToolPlan, quotaReady, tokenQuota, isSending } = get();
+    if (isSending) return;
     if (pendingToolPlan) return;
     if (!quotaReady || tokenQuota <= 0) return;
     const text = inputDraft.trim();
@@ -364,6 +393,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
       serviceMaintenance: false,
       pendingToolPlan: null,
       mutationProgress: null,
+      pendingEditReview: null,
     });
   },
 
@@ -390,6 +420,24 @@ export const useUltraStore = create<UltraState>((set, get) => ({
     postToHost({
       type: "TOOL_PLAN_CANCEL",
       payload: { planId: plan.planId },
+    });
+  },
+
+  approveEditReview: () => {
+    const r = get().pendingEditReview;
+    if (!r) return;
+    postToHost({
+      type: "EDIT_REVIEW_APPROVE",
+      payload: { reviewId: r.reviewId },
+    });
+  },
+
+  undoEditReview: () => {
+    const r = get().pendingEditReview;
+    if (!r) return;
+    postToHost({
+      type: "EDIT_REVIEW_UNDO",
+      payload: { reviewId: r.reviewId },
     });
   },
 

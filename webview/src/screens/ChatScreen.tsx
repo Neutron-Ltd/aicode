@@ -9,7 +9,7 @@ import { InputArea } from "../components/chat/InputArea";
 import { MessageList } from "../components/chat/MessageList";
 import { MutationBanner } from "../components/chat/MutationBanner";
 import { SettingsPanel } from "../components/chat/SettingsPanel";
-import { ToolPlanPanel } from "../components/chat/ToolPlanPanel";
+import { EditReviewBanner } from "../components/chat/EditReviewBanner";
 import { WorkstationConnectionFooter } from "../components/chat/WorkstationConnectionFooter";
 import { useUltraStore } from "../store/ultraStore";
 
@@ -32,18 +32,17 @@ export function ChatScreen(): React.ReactElement {
   const clearChat = useUltraStore((s) => s.clearChat);
   const requestLogout = useUltraStore((s) => s.requestLogout);
   const dismissChatError = useUltraStore((s) => s.dismissChatError);
-  const pendingToolPlan = useUltraStore((s) => s.pendingToolPlan);
-  const confirmToolPlan = useUltraStore((s) => s.confirmToolPlan);
-  const cancelToolPlan = useUltraStore((s) => s.cancelToolPlan);
   const mutationProgress = useUltraStore((s) => s.mutationProgress);
-  const focusEditorGroups = useUltraStore((s) => s.focusEditorGroups);
+  const pendingEditReview = useUltraStore((s) => s.pendingEditReview);
+  const approveEditReview = useUltraStore((s) => s.approveEditReview);
+  const undoEditReview = useUltraStore((s) => s.undoEditReview);
   const runtimeMode = useUltraStore((s) => s.runtimeMode);
 
   const clearChatDisabled =
     messages.length === 0 || isSending;
 
   const inputDisabled =
-    !quotaReady || (quotaReady && tokenQuota <= 0) || isSending || !!pendingToolPlan;
+    !quotaReady || (quotaReady && tokenQuota <= 0) || isSending;
 
   const inputPlaceholder =
     !quotaReady
@@ -86,17 +85,14 @@ export function ChatScreen(): React.ReactElement {
         {chatError ? (
           <ChatErrorBanner message={chatError} onDismiss={dismissChatError} />
         ) : null}
-        {pendingToolPlan ? (
-          <ToolPlanPanel
-            plan={pendingToolPlan}
-            onConfirm={confirmToolPlan}
-            onCancel={cancelToolPlan}
-          />
-        ) : null}
         {mutationProgress ? (
-          <MutationBanner
-            progress={mutationProgress}
-            onFocusEditor={focusEditorGroups}
+          <MutationBanner progress={mutationProgress} />
+        ) : null}
+        {pendingEditReview ? (
+          <EditReviewBanner
+            relativePath={pendingEditReview.relativePath}
+            onApprove={approveEditReview}
+            onUndo={undoEditReview}
           />
         ) : null}
         <MessageList
