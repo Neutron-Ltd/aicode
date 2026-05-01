@@ -6,14 +6,16 @@ export function InputArea({
   value,
   onChange,
   onSend,
-  disabled,
   placeholder,
+  isSending,
+  pendingEditReview,
 }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
-  disabled?: boolean;
   placeholder?: string;
+  isSending: boolean;
+  pendingEditReview: boolean;
 }): React.ReactElement {
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -32,7 +34,7 @@ export function InputArea({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!disabled && value.trim()) {
+      if (value.trim()) {
         onSend();
       }
     }
@@ -51,18 +53,17 @@ export function InputArea({
           ref={taRef}
           rows={1}
           value={value}
-          disabled={disabled}
           placeholder={placeholder ?? "Message…"}
           onChange={(e) => {
             onChange(e.target.value);
             resize();
           }}
           onKeyDown={handleKeyDown}
-          className="min-h-[2.25rem] max-h-40 flex-1 resize-none bg-transparent px-1.5 py-2 text-[13px] leading-snug text-[var(--vscode-input-foreground)] placeholder:[color:color-mix(in_srgb,var(--vscode-input-foreground)_42%,transparent)] focus:outline-none disabled:opacity-45"
+          className="min-h-[2.25rem] max-h-40 flex-1 resize-none bg-transparent px-1.5 py-2 text-[13px] leading-snug text-[var(--vscode-input-foreground)] placeholder:[color:color-mix(in_srgb,var(--vscode-input-foreground)_42%,transparent)] focus:outline-none"
         />
         <button
           type="button"
-          disabled={disabled || !value.trim()}
+          disabled={!value.trim()}
           onClick={onSend}
           className="mb-0.5 shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-opacity duration-200 ease-out hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vscode-focusBorder)] disabled:cursor-not-allowed disabled:opacity-35"
           style={{
@@ -73,7 +74,12 @@ export function InputArea({
           Send
         </button>
       </div>
-      <p className="mt-1.5 px-0.5 text-[10px] opacity-60" style={{ color: "var(--vscode-descriptionForeground)" }}>
+      <p className="mt-1.5 px-0.5 text-[10px] leading-snug opacity-70" style={{ color: "var(--vscode-descriptionForeground)" }}>
+        {pendingEditReview
+          ? "Review the highlighted change above — Approve or Undo before trusting the edit."
+          : isSending
+            ? "Ultra is working on your request…"
+            : "Ready — you can send a follow-up."}{" "}
         Enter to send · Shift+Enter newline
       </p>
     </div>

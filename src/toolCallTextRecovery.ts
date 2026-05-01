@@ -171,6 +171,60 @@ function collectSpanMatches(work: string): SpanMatch[] {
 }
 
 /**
+ * Removes every substring that parses as our allowed tool shorthand(s) ({ "name":"search_replace", ... }).
+ * Loops until no matches so duplicate or overlapping echoed JSON does not leak into the UI.
+ */
+export function stripKnownToolJsonFromDisplay(text: string): string {
+  let work = unwrapCodeFences(text);
+  for (let i = 0; i < 256; i++) {
+    const matches = collectSpanMatches(work);
+    if (matches.length === 0) {
+      break;
+    }
+    const largest = matches.reduce((a, b) =>
+      b.end - b.start > a.end - a.start ? b : a
+    );
+    const next =
+      work.slice(0, largest.start) +
+      work.slice(largest.end).replace(/^[\s\n\r]*/, "");
+    if (next === work) break;
+    work = next.trim();
+  }
+  return work.trim();
+}
+
+/** Public alias — use before posting assistant prose to the webview or chat history. */
+export function sanitizeAssistantMarkdownForUi(raw: string): string {
+  const noJson = stripKnownToolJsonFromDisplay(raw);
+  return stripPseudoToolInvocations(noJson);
+}
+
+/**
+ * Removes obvious LLM pseudo-calls like read_file(index.html) from visible chat (ASCII paths only).
+ */
+export function stripPseudoToolInvocations(text: string): string {
+  const tools = [
+    "read_file",
+    "write_file",
+    "search_replace",
+    "create_file",
+    "list_directory",
+  ] as const;
+  let work = text;
+  for (const name of tools) {
+    const re = new RegExp(
+      `\\b${name}\\s*\\(\\s*['"]?([./\\w-]{0,240}?)['"]?\\s*\\)`,
+      "gi"
+    );
+    work = work.replace(re, "");
+  }
+  return work
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+/**
  * When the model prints tool intent as assistant text instead of OpenAI `tool_calls`,
  * parse a strict subset into `ToolCallWire[]` and return prose-only `displayText`.
  */
@@ -192,6 +246,9 @@ export function tryRecoverToolCallsFromAssistantText(text: string): {
   if (!displayText && work.trim() === work.slice(last.start, last.end).trim()) {
     displayText = "";
   }
+
+  displayText = stripKnownToolJsonFromDisplay(displayText);
+  displayText = stripPseudoToolInvocations(displayText);
 
   return { toolCalls: last.wires, displayText };
 }

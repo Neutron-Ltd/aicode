@@ -45,7 +45,10 @@ export interface UltraState {
   isIndexing: boolean;
   messages: ChatMessage[];
   inputDraft: string;
+  /** True until the assistant turn completes (model + tools + follow-up rounds). Blocks concurrent sends. */
   isSending: boolean;
+  /** True while the host is fetching/streaming assistant output — locks the prompt box only during model I/O. */
+  isChatModelStreaming: boolean;
   /** After AI writes a file: user can Undo or Approve in chat. */
   pendingEditReview: { reviewId: string; relativePath: string } | null;
   /** AI tool batch awaiting Confirm / Cancel in the webview. */
@@ -94,6 +97,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   messages: [],
   inputDraft: "",
   isSending: false,
+  isChatModelStreaming: false,
   pendingEditReview: null,
   pendingToolPlan: null,
   mutationProgress: null,
@@ -163,9 +167,13 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             },
           ],
           isSending: false,
+          isChatModelStreaming: false,
           chatError: null,
           serviceMaintenance: false,
         }));
+        break;
+      case "CHAT_MODEL_STREAM_ACTIVE":
+        set({ isChatModelStreaming: msg.payload.active });
         break;
       case "CHAT_STREAM_START":
         set((s) => ({
@@ -180,6 +188,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           chatError: null,
           serviceMaintenance: false,
           mutationProgress: null,
+          isChatModelStreaming: false,
         }));
         break;
       case "CHAT_STREAM_DELTA":
@@ -196,6 +205,20 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           messages: s.messages.map((m) =>
             m.id === msg.payload.id ? { ...m, content: msg.payload.content } : m
           ),
+          isChatModelStreaming: false,
+        }));
+        break;
+      case "CHAT_ASSISTANT_APPEND":
+        set((s) => ({
+          messages: s.messages.map((m) => {
+            if (m.id !== msg.payload.id) return m;
+            const chunk = msg.payload.markdown;
+            const prev = m.content ?? "";
+            const next =
+              prev.trim().length === 0 ? chunk : `${prev.trimEnd()}\n\n${chunk}`;
+            return { ...m, content: next };
+          }),
+          isChatModelStreaming: false,
         }));
         break;
       case "CHAT_STREAM_END":
@@ -207,12 +230,14 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           if (!emptyAssistant) {
             return {
               isSending: false,
+              isChatModelStreaming: false,
               serviceMaintenance: false,
               mutationProgress: null,
             };
           }
           return {
             isSending: false,
+            isChatModelStreaming: false,
             serviceMaintenance: false,
             mutationProgress: null,
             messages: s.messages.map((m, idx) =>
@@ -240,6 +265,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
             }
             return {
               isSending: false,
+              isChatModelStreaming: false,
               chatError: null,
               serviceMaintenance: true,
               mutationProgress: null,
@@ -249,6 +275,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
         } else {
           set({
             isSending: false,
+            isChatModelStreaming: false,
             chatError: msg.payload.message,
             serviceMaintenance: false,
             mutationProgress: null,
@@ -266,6 +293,7 @@ export const useUltraStore = create<UltraState>((set, get) => ({
           chatError: null,
           serviceMaintenance: false,
           isSending: false,
+          isChatModelStreaming: false,
           isIndexing: false,
           messages: [],
           inputDraft: "",
@@ -355,10 +383,8 @@ export const useUltraStore = create<UltraState>((set, get) => ({
   },
 
   sendUserMessage: () => {
-    const { inputDraft, pendingToolPlan, quotaReady, tokenQuota, isSending } = get();
-    if (isSending) return;
+    const { inputDraft, pendingToolPlan } = get();
     if (pendingToolPlan) return;
-    if (!quotaReady || tokenQuota <= 0) return;
     const text = inputDraft.trim();
     if (!text) return;
 

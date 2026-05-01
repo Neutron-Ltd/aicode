@@ -7,6 +7,8 @@ import { isBlockedRelativePath } from "../tooling/toolPathGuards";
 import { looksBinary, MAX_TOOL_FILE_BYTES } from "../tooling/looksBinary";
 import { AsyncSerialQueue } from "./toolExecutionQueue";
 import { appendProblemsSectionToMessage } from "./postEditDiagnostics";
+import { formatFileWithLineNumbers } from "../tooling/searchReplaceWithinLines";
+import { mergeWriteReplacementWithDocumentIndents } from "../tooling/writeFileIndent";
 
 export type ToolCallWire = {
   id: string;
@@ -21,6 +23,8 @@ export type ToolExecutionResult = {
   name: string;
   aborted?: string;
   editReview?: { relativePath: string; highlightRange: vscode.Range };
+  /** After a successful mutating workspace edit — next tools in same round should see this baseline. */
+  postApplyVersion?: { relativePath: string; version: number };
 };
 
 /**
@@ -114,6 +118,34 @@ export class ToolExecutionService {
       return null;
     }
     return { startLineIdx: sl - 1, endLineIdx: el - 1 };
+  }
+
+  /**
+   * Optional `within_lines` / `withinLines` object for search_replace (1-based inclusive).
+   */
+  private parseWithinLines(
+    wl: unknown,
+    docLineCount: number
+  ): { start_line: number; end_line: number } | undefined {
+    if (wl === null || wl === undefined) {
+      return undefined;
+    }
+    if (typeof wl !== "object") {
+      return undefined;
+    }
+    const o = wl as Record<string, unknown>;
+    const sl = o.start_line ?? o.startLine;
+    const el = o.end_line ?? o.endLine;
+    if (typeof sl !== "number" || typeof el !== "number") {
+      return undefined;
+    }
+    if (!Number.isInteger(sl) || !Number.isInteger(el)) {
+      return undefined;
+    }
+    if (sl < 1 || el < sl || sl > docLineCount || el > docLineCount) {
+      return undefined;
+    }
+    return { start_line: sl, end_line: el };
   }
 
   /** Non-overlapping occurrences of `needle` in `haystack` (forward scan). */
@@ -231,10 +263,17 @@ export class ToolExecutionService {
         content: "File appears binary or non-text (skipped for safety).",
       };
     }
+    const doc = await vscode.workspace.openTextDocument(uri);
+    let content = doc.getText();
+    const wantLineNumbers =
+      args.line_numbers === true || args.lineNumbers === true;
+    if (wantLineNumbers) {
+      content = formatFileWithLineNumbers(content);
+    }
     return {
       tool_call_id: id,
       name,
-      content: new TextDecoder("utf-8").decode(bytes),
+      content,
     };
   }
 
@@ -282,7 +321,13 @@ export class ToolExecutionService {
     }
     const { startLineIdx, endLineIdx } = rangeParsed;
     const firstLineText = doc.lineAt(startLineIdx).text;
-    replacement = this.normalizeReplacementIndent(firstLineText, replacement);
+    const existingLinesInRange: string[] = [];
+    for (let i = startLineIdx; i <= endLineIdx; i++) {
+      existingLinesInRange.push(doc.lineAt(i).text);
+    }
+    const merged = mergeWriteReplacementWithDocumentIndents(existingLinesInRange, replacement);
+    replacement =
+      merged !== null ? merged : this.normalizeReplacementIndent(firstLineText, replacement);
 
     const edit = new vscode.WorkspaceEdit();
     const startPos = new vscode.Position(startLineIdx, 0);
@@ -317,6 +362,7 @@ export class ToolExecutionService {
       name,
       content: toolContent,
       editReview: { relativePath: rel, highlightRange },
+      postApplyVersion: { relativePath: rel, version: afterDoc.version },
     };
   }
 
@@ -330,6 +376,11 @@ export class ToolExecutionService {
     const old_string = typeof args.old_string === "string" ? args.old_string : "";
     const new_string = typeof args.new_string === "string" ? args.new_string : "";
     const replaceAll = args.replace_all === true;
+    let aroundNormalized: number | undefined;
+    const rawAround = args.around_line ?? args.aroundLine;
+    if (typeof rawAround === "number" && Number.isInteger(rawAround) && rawAround >= 1) {
+      aroundNormalized = rawAround;
+    }
 
     if (old_string.length === 0 || /^\s+$/.test(old_string)) {
       return {
@@ -378,7 +429,33 @@ export class ToolExecutionService {
       };
     }
 
-    const matches = this.findAllOccurrences(textBefore, old_string);
+    const wlUnknown = args.within_lines ?? args.withinLines;
+    let matches = this.findAllOccurrences(textBefore, old_string);
+    if (
+      wlUnknown !== undefined &&
+      wlUnknown !== null &&
+      (typeof wlUnknown !== "object" || Array.isArray(wlUnknown))
+    ) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          "Error: within_lines must be an object like { \"start_line\": number, \"end_line\": number } (1-based inclusive lines). Omit the field when unused.",
+      };
+    }
+    const parsedWithin =
+      wlUnknown === undefined || wlUnknown === null
+        ? undefined
+        : this.parseWithinLines(wlUnknown, doc.lineCount);
+    if (wlUnknown !== undefined && wlUnknown !== null && parsedWithin === undefined) {
+      return {
+        tool_call_id: id,
+        name,
+        content:
+          `Error: Invalid within_lines. Use start_line and end_line within 1..${doc.lineCount} with start_line <= end_line. Re-call read_file with line_numbers true and copy line numbers.`,
+      };
+    }
+
     if (matches.length === 0) {
       return {
         tool_call_id: id,
@@ -387,15 +464,48 @@ export class ToolExecutionService {
           "Error: old_string not found in file. Call read_file on this path and copy the exact text (including indentation and line endings as returned).",
       };
     }
-    if (!replaceAll && matches.length > 1) {
+    if (parsedWithin !== undefined) {
+      matches = matches.filter((off) => {
+        const lastIdx = off + old_string.length - 1;
+        const startLn = doc.positionAt(off).line + 1;
+        const endLn = doc.positionAt(lastIdx).line + 1;
+        return (
+          startLn >= parsedWithin.start_line &&
+          endLn <= parsedWithin.end_line
+        );
+      });
+    }
+    if (matches.length === 0 && parsedWithin !== undefined) {
       return {
         tool_call_id: id,
         name,
         content:
-          `Error: old_string matched ${matches.length} times. Include more surrounding context so the match is unique, or set replace_all to true.`,
+          `Error: old_string occurs in the file but not fully within lines ${parsedWithin.start_line}–${parsedWithin.end_line}. Widen within_lines or use more specific old_string. Re-read with line_numbers true.`,
       };
     }
 
+    if (!replaceAll && matches.length > 1) {
+      if (aroundNormalized === undefined) {
+        return {
+          tool_call_id: id,
+          name,
+          content:
+            `Error: old_string matched ${matches.length} times inside the allowed span. Narrow old_string so it matches once, set replace_all to true, pass around_line (1-based) to choose the occurrence nearest that line, or tighten within_lines.`,
+        };
+      }
+      const picks = matches.map((offset) => ({
+        offset,
+        line: doc.positionAt(offset).line + 1,
+      }));
+      const chosen = picks.reduce((best, cur) => {
+        const da = Math.abs(cur.line - aroundNormalized);
+        const db = Math.abs(best.line - aroundNormalized);
+        if (da < db) return cur;
+        if (da === db && cur.offset < best.offset) return cur;
+        return best;
+      });
+      matches = [chosen.offset];
+    }
     const norms: string[] = [];
     for (const st of matches) {
       const lineIdx = doc.positionAt(st).line;
@@ -450,6 +560,7 @@ export class ToolExecutionService {
       name,
       content: toolContent,
       editReview: { relativePath: rel, highlightRange },
+      postApplyVersion: { relativePath: rel, version: afterDoc.version },
     };
   }
 
@@ -490,6 +601,7 @@ export class ToolExecutionService {
       name,
       content: toolContent,
       editReview: { relativePath: rel, highlightRange },
+      postApplyVersion: { relativePath: rel, version: afterDoc.version },
     };
   }
 

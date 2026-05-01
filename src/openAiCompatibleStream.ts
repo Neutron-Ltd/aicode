@@ -1,5 +1,5 @@
 import type { ToolCallWire } from "./services/ToolExecutionService";
-import { tryRecoverToolCallsFromAssistantText } from "./toolCallTextRecovery";
+import { tryRecoverToolCallsFromAssistantText, sanitizeAssistantMarkdownForUi } from "./toolCallTextRecovery";
 
 type ToolCallAcc = Map<
   number,
@@ -187,6 +187,7 @@ export async function streamOpenAiCompatibleSse(
       contentRecoveryApplied = true;
     }
   }
+  assistantText = sanitizeAssistantMarkdownForUi(assistantText);
 
   return {
     toolCalls,

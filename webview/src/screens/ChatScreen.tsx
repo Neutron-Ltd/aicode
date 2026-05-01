@@ -17,7 +17,6 @@ export function ChatScreen(): React.ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const tokenQuota = useUltraStore((s) => s.tokenQuota);
-  const quotaReady = useUltraStore((s) => s.quotaReady);
   const messages = useUltraStore((s) => s.messages);
   const inputDraft = useUltraStore((s) => s.inputDraft);
   const setInputDraft = useUltraStore((s) => s.setInputDraft);
@@ -40,16 +39,6 @@ export function ChatScreen(): React.ReactElement {
 
   const clearChatDisabled =
     messages.length === 0 || isSending;
-
-  const inputDisabled =
-    !quotaReady || (quotaReady && tokenQuota <= 0) || isSending;
-
-  const inputPlaceholder =
-    !quotaReady
-      ? "Loading quota…"
-      : tokenQuota <= 0
-        ? "Token quota exhausted."
-        : undefined;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-ultra-surface">
@@ -104,8 +93,8 @@ export function ChatScreen(): React.ReactElement {
           value={inputDraft}
           onChange={setInputDraft}
           onSend={sendUserMessage}
-          disabled={inputDisabled}
-          placeholder={inputPlaceholder}
+          isSending={isSending}
+          pendingEditReview={pendingEditReview !== null}
         />
         <WorkstationConnectionFooter />
       </div>

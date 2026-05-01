@@ -19,7 +19,7 @@
       "activitybar": [
         {
           "id": "buildUltra",
-          "title": "Build Ultra",
+          "title": "Ultra AI",
           "icon": "media/icon.svg"
         }
       ]
@@ -87,7 +87,8 @@
     "build:webview": "node webview/esbuild.mjs && npm run build:webview:css",
     "build:webview:css": "tailwindcss -i ./webview/src/index.css -o ./media/webview.css --minify",
     "watch:webview": "node webview/esbuild.mjs --watch",
-    "pretest": "npm run compile && npm run build:webview"
+    "pretest": "npm run compile && npm run build:webview",
+    "test": "node --test out/tooling/searchReplaceWithinLines.test.js out/tooling/writeFileIndent.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

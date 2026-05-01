@@ -36,12 +36,16 @@ export type HostToWebviewMessage =
       type: "RECEIVE_RESPONSE";
       payload: { id: string; content: string };
     }
+  /** True while fetching/streaming assistant output for the current HTTP round (not during local tool execution). */
+  | { type: "CHAT_MODEL_STREAM_ACTIVE"; payload: { active: boolean } }
   /** Start assistant message shell (Chunk 6 streaming). */
   | { type: "CHAT_STREAM_START"; payload: { id: string } }
   /** Append token/text to the assistant message with the given id. */
   | { type: "CHAT_STREAM_DELTA"; payload: { id: string; delta: string } }
   /** Replace full assistant message content (e.g. after stripping recovered tool JSON from streamed text). */
   | { type: "CHAT_ASSISTANT_CONTENT"; payload: { id: string; content: string } }
+  /** Append markdown chunk to assistant message after initial replace (same id; stacks steps like Cursor-style trace). */
+  | { type: "CHAT_ASSISTANT_APPEND"; payload: { id: string; markdown: string } }
   /** Stream finished successfully. */
   | { type: "CHAT_STREAM_END"; payload: { id: string } }
   /** Chat / Edge / network failure (distinct from AUTH_ERROR). */
@@ -238,6 +242,13 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       if (typeof id !== "string" || typeof content !== "string") return null;
       return { type: "RECEIVE_RESPONSE", payload: { id, content } };
     }
+    case "CHAT_MODEL_STREAM_ACTIVE": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const active = p.active;
+      if (typeof active !== "boolean") return null;
+      return { type: "CHAT_MODEL_STREAM_ACTIVE", payload: { active } };
+    }
     case "CHAT_STREAM_START": {
       const p = raw.payload;
       if (!isRecord(p)) return null;
@@ -260,6 +271,14 @@ export function parseHostMessage(raw: unknown): HostToWebviewMessage | null {
       const content = p.content;
       if (typeof id !== "string" || typeof content !== "string") return null;
       return { type: "CHAT_ASSISTANT_CONTENT", payload: { id, content } };
+    }
+    case "CHAT_ASSISTANT_APPEND": {
+      const p = raw.payload;
+      if (!isRecord(p)) return null;
+      const id = p.id;
+      const markdown = p.markdown;
+      if (typeof id !== "string" || typeof markdown !== "string") return null;
+      return { type: "CHAT_ASSISTANT_APPEND", payload: { id, markdown } };
     }
     case "CHAT_STREAM_END": {
       const p = raw.payload;
