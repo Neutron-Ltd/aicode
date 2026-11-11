@@ -4,6 +4,16 @@
   "description": "AI coding assistant — Ultra AI by Build Ultra",
   "version": "0.0.1",
   "publisher": "ultra",
+  "license": "MIT",
+  "author": "Neutron Ltd",
+  "homepage": "https://github.com/Neutron-Ltd/aicode#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Neutron-Ltd/aicode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Neutron-Ltd/aicode/issues"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -83,7 +93,7 @@
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "node scripts/gen-config.mjs && tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "watch": "node scripts/gen-config.mjs && tsc -watch -p ./",
     "build:webview": "node webview/esbuild.mjs && npm run build:webview:css",
     "build:webview:css": "tailwindcss -i ./webview/src/index.css -o ./media/webview.css --minify",
     "watch:webview": "node webview/esbuild.mjs --watch",

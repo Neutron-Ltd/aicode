@@ -4,9 +4,67 @@ Build Ultra is an AI coding assistant delivered as a VS Code extension. It provi
 
 ---
 
+## Getting started
+
+Requirements: Node.js 20+, npm, and VS Code 1.85 or newer.
+
+```bash
+git clone https://github.com/Neutron-Ltd/aicode.git
+cd aicode
+npm install
+cp .env.example .env   # optional: your own Supabase URL and anon key
+npm run compile
+npm run build:webview
+```
+
+Open the folder in VS Code and press **F5** to launch an Extension Development Host with the sidebar loaded.
+
+- **Private compute only:** no `.env` is needed. Leave it empty, then point the extension at any OpenAI-compatible server from the sidebar settings.
+- **Cloud mode:** requires your own Supabase project; see below. This repository does not ship credentials for any hosted backend.
+
+To package a `.vsix`, run `npx vsce package`. The `vscode:prepublish` script runs both builds.
+
+## Self-hosting the backend
+
+The cloud path (sign-in, codebase indexing, quotas, billing) runs on [Supabase](https://supabase.com). To run your own:
+
+1. Create a Supabase project and enable the `vector` extension (the first migration also does this).
+2. Link and push the schema:
+   ```bash
+   supabase link --project-ref <your-project-ref>
+   supabase db push
+   ```
+   Before exposing the project to users, review the Row-Level Security policies in `supabase/migrations/`.
+3. Set the Edge Function secrets. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are provided automatically by Supabase.
+
+   | Secret | Required | Purpose |
+   |---|---|---|
+   | `AI_UPSTREAM_KEY` | Yes | API key for your OpenAI-compatible upstream (`THREETW_AI_API_KEY` is accepted as a legacy alias) |
+   | `BUILD_ULTRA_UPSTREAM_CHAT_URL` | Yes | Full URL of the upstream `/v1/chat/completions` endpoint |
+   | `BUILD_ULTRA_UPSTREAM_EMBEDDINGS_URL` | For indexing | Full URL of the upstream `/v1/embeddings` endpoint |
+   | `BUILD_ULTRA_DEFAULT_CHAT_MODEL` | No | Model used when the client does not pick one |
+   | `BUILD_ULTRA_UPSTREAM_FORMAT` | No | Request format; only `openai` is currently supported |
+   | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | For billing | Used by `stripe-webhook` to map subscriptions to quota tiers |
+
+   ```bash
+   supabase secrets set AI_UPSTREAM_KEY=... BUILD_ULTRA_UPSTREAM_CHAT_URL=...
+   ```
+4. Deploy the functions: `supabase functions deploy` (JWT verification settings are in `supabase/config.toml`; each function validates the caller itself).
+5. Put your project URL and **publishable/anon** key in `.env` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and rebuild with `npm run compile`. Never put the `service_role` key in `.env`; it would be bundled into the extension.
+
+The system prompt sent with each cloud request is read from the `master_prompts` table. `prompt.md` is a human-readable reference copy and is not loaded automatically.
+
+## Contributing, security, and license
+
+- Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+- Released under the [MIT License](LICENSE).
+
+---
+
 ## Repository tree
 
-Excludes generated lockfiles, packaged `node_modules`, local Supabase CLI cache (`.temp`), and source maps.
+Excludes generated lockfiles, packaged `node_modules`, local Supabase CLI cache (`.temp`), and source maps. Files marked _(generated)_ are produced by the build and not committed.
 
 ```
 .
@@ -16,10 +74,13 @@ Excludes generated lockfiles, packaged `node_modules`, local Supabase CLI cache 
 │   ├── launch.json
 │   └── tasks.json
 ├── .vscodeignore
+├── CONTRIBUTING.md
+├── LICENSE
+├── SECURITY.md
 ├── media/
 │   ├── icon.svg
-│   ├── index.js
-│   └── webview.css
+│   ├── index.js          (generated)
+│   └── webview.css       (generated)
 ├── package.json
 ├── postcss.config.js
 ├── prompt.md
@@ -36,7 +97,7 @@ Excludes generated lockfiles, packaged `node_modules`, local Supabase CLI cache 
 │   │   ├── openAiTools.ts
 │   │   ├── sanitizeMessages.ts
 │   │   └── workstationRequest.ts
-│   ├── config.generated.ts
+│   ├── config.generated.ts   (generated)
 │   ├── config.ts
 │   ├── diffReview.ts
 │   ├── extension.ts
@@ -135,7 +196,7 @@ These notes describe **purpose**, not exhaustive exports.
 - **`src/extension.ts`** — Registers the sidebar webview provider, bundles services (auth, API, indexer, prompt builder), subscribes to workspace save events for incremental indexing hooks, exposes command handlers, applies configuration watchers, wires telemetry teardown.
 - **`src/BuildUltraChatViewProvider.ts`** — Builds offline HTML for the webview with a strict content-security policy; bridges host ↔ UI messages (login, send chat, logout, indexing, inserts, workstation reachability pings); pushes runtime mode updates to React.
 - **`src/buildUltraSettings.ts`** — Reads and writes VS Code workspace or user settings plus extension-held cache for workstation host and default model; resolves URLs for completions and catalog endpoints; persists private compute secrets via secure storage helpers.
-- **`src/config.ts` / `src/config.generated.ts`** — Static and generated Supabase URLs and anon key for bundled builds (`scripts/gen-config.mjs`).
+- **`src/config.ts` / `src/config.generated.ts`** — Static and generated Supabase URLs and anon key for bundled builds. `config.generated.ts` is written from `.env` by `scripts/gen-config.mjs` on every compile and is not committed.
 - **`src/shared/messages.ts`** — Typed payloads for ping/pong, auth outcomes, quota updates, chat streaming events, indexing results, tooling progress, staged edit-review state, obsolete tool-plan handshakes the UI may still deserialize.
 - **`src/services/`** — **Auth**: Supabase PKCE sessions in secret-backed storage, login/register/logout, quota fetch after login, master prompt prefetch, cloud-held workstation linkage sync. **API**: streaming chat orchestration for cloud versus workstation targets, repeated tool-call rounds, edit-review bookkeeping, assistant markdown injection. **Prompt builder**: assembles payloads with rules file, diagnostics, editor buffer and selection plus terminal placeholder. **Tools**: guarded filesystem operations in a serialized queue with version stamping and indentation helpers for ranged writes. **Editor / terminal helpers**: caret context and insert-at-selection behavior versus empty selection; terminal context stub mirroring Marketplace constraints. **Indexer**: chunked walks with ignore-pattern merging, incremental embed payloads. **Supporting**: diagnostic formatting appended after edits, telemetry hooks for undo snapshots, bounded search-replace within line regions.
 - **`src/chatPrompt/`** — Truncating context bundles to approximate token budgets mirroring backend rules; sanitizing conversational wire format for upstream calls; workstation JSON bodies aligned with streaming clients; mirrored tool definitions consumed where the extension assembles completions locally.
@@ -145,7 +206,7 @@ These notes describe **purpose**, not exhaustive exports.
 - **`src/types/chatPayload.ts`** — Shape of payloads crossing from editor context into cloud workloads.
 - **`src/toolPlanParse.ts`** — Utility work around parsing narrated tooling plans where still referenced.
 - **`src/diffReview.ts` / `src/virtualDocumentProvider.ts`** — **Dormant in this checkout:** definitions for preview/virtual diff flows are not registered from activation; retained for future experimentation.
-- **`media/`** — Compiled web bundles and Tailwind-derived stylesheet referenced by URI from the sidebar webview (`icon.svg` for activity bar branding).
+- **`media/`** — Compiled web bundles and Tailwind-derived stylesheet referenced by URI from the sidebar webview, generated by `npm run build:webview` and not committed (`icon.svg` for activity bar branding is the only tracked asset).
 - **`webview/src/`** — React entry screens (login versus chat shell), centralized Zustand store applying host patches, Markdown rendering with fenced code insertion actions, overlays for errors, quotas, workstation status, editable review ribbons, Tailwind typography.
 - **`webview/esbuild.mjs` / Tailwind tooling** (`tailwind.config.js`, `postcss.config.js`, root `package.json`) — Build pipeline for SPA assets plus extension compile script.
 - **`prompt.md`** (repository root) — Human-authored system prompt prose in plain text; not automatically wired to hosted chat (see database-backed master prompts in cloud migrations).

@@ -4,3 +4,15 @@ out
 .DS_Store
 .env
 prompt
+
+# Local debugging notes
+debug/
+
+# Generated at build time (npm run compile / npm run build:webview)
+src/config.generated.ts
+media/index.js
+media/index.js.map
+media/webview.css
+
+# Supabase CLI local cache (contains linked project details)
+supabase/.temp/
